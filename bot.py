@@ -60,7 +60,6 @@ async def main_loop():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
     
-    # Якщо канал не знайдено в кеші, спробуємо знайти через API
     if not channel:
         try:
             channel = await client.fetch_channel(CHANNEL_ID)
@@ -77,7 +76,7 @@ async def main_loop():
                 ongoing = await fetch_api(session, "/flights/ongoing")
                 if ongoing and "results" in ongoing:
                     for f in ongoing["results"]:
-                        # БЕЗПЕЧНЕ ОТРИМАННЯ ID (щоб не було помилок)
+                        # БЕЗПЕЧНЕ ОТРИМАННЯ ID
                         fid = str(f.get("_id") or f.get("id"))
                         if not fid or fid == "None": continue
                         
@@ -87,13 +86,11 @@ async def main_loop():
                         cs = f.get("callsign", "N/A")
                         dep = f.get("departure", {}).get("icao", "????")
                         arr = f.get("arrival", {}).get("icao", "????")
-                        # Тип літака
                         ac = f.get("aircraft", {}).get("airframe", {}).get("ident", "A/C")
                         delay = f.get("delay")
                         
                         # -- ВЗЛІТ (DEPARTED) --
                         if f.get("takeoffTimeAct") and not state[fid].get("takeoff"):
-                            # Тягнемо деталі для імені пілота
                             det = await fetch_api(session, f"/flight/{fid}")
                             pilot = "Pilot"
                             pax = f.get("pax", 0)
@@ -144,7 +141,6 @@ async def main_loop():
                         fid = str(f.get("_id") or f.get("id"))
                         if not fid or fid == "None": continue
                         
-                        # Якщо рейс закритий і ми ще не писали про це
                         if f.get("close") and not state.get(fid, {}).get("completed"):
                             state.setdefault(fid, {})
                             det = await fetch_api(session, f"/flight/{fid}")
@@ -152,13 +148,21 @@ async def main_loop():
                             if det and "flight" in det:
                                 fl = det["flight"]
                                 
-                                # Збір даних для фінального звіту
+                                # --- ВИПРАВЛЕННЯ ПОМИЛКИ З МЕРЕЖЕЮ ---
+                                raw_net = fl.get("network", "OFFLINE")
+                                if isinstance(raw_net, dict):
+                                    # Якщо це словник, беремо 'name' або 'code'
+                                    net = raw_net.get("name", "NETWORK").upper()
+                                else:
+                                    # Якщо це рядок або щось інше
+                                    net = str(raw_net).upper()
+                                # -------------------------------------
+
                                 cs = fl.get("callsign", "N/A")
                                 dep = fl.get("departure", {}).get("icao", "????")
                                 arr = fl.get("arrival", {}).get("icao", "????")
                                 ac = fl.get("aircraft", {}).get("airframe", {}).get("ident", "A/C")
                                 pilot = fl.get("pilot", {}).get("fullname", "Pilot")
-                                net = fl.get("network", "OFFLINE").upper()
                                 pax = fl.get("pax", 0)
                                 cargo = fl.get("cargo", 0)
                                 dist = fl.get("distance", 0)
