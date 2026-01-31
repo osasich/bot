@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import logging
+import re
 from pathlib import Path
 
 # ---------- НАЛАШТУВАННЯ ----------
@@ -33,6 +34,14 @@ def save_state(state):
         STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
     except: pass
 
+def clean_airport_name(name):
+    if not name: return ""
+    name = re.sub(r"\(.*?\)", "", name)
+    removals = ["International", "Regional", "Airport", "Aerodrome", "Air Base", "Intl"]
+    for word in removals:
+        name = name.replace(word, "")
+    return name.strip()
+
 def get_flag(icao):
     if not icao or len(icao) < 2: return "🏳️"
     icao = icao.upper()
@@ -51,14 +60,23 @@ def get_flag(icao):
 def get_timing(delay):
     try:
         d = float(delay)
-        if d > 5: return f"🔴 Затримка {int(d)} хв"
-        if d < -5: return f"🟡 Раніше на {abs(int(d))} хв"
-        return "🟢 Вчасно"
+        if d > 5: return f"🔴 Затримка **{int(d)} хв**"
+        if d < -5: return f"🟡 Раніше на **{abs(int(d))} хв**"
+        return "🟢 **Вчасно**"
     except: return "⏱️ Невідомо"
 
 def format_time(minutes):
     if not minutes: return "00:00"
     return f"{int(minutes // 60):02d}:{int(minutes % 60):02d}"
+
+def get_rating_square(rating):
+    try:
+        r = float(rating)
+        if r >= 9.5: return "🟩"
+        if r >= 8.0: return "🟨"
+        if r >= 5.0: return "🟧"
+        return "🟥"
+    except: return "⬜"
 
 async def fetch_api(session, path, method="GET", body=None):
     try:
@@ -66,15 +84,19 @@ async def fetch_api(session, path, method="GET", body=None):
             return await r.json() if r.status == 200 else None
     except: return None
 
-# ---------- ГЕНЕРАТОР ПОВІДОМЛЕННЯ (EMBED) ----------
+# ---------- ГЕНЕРАТОР ПОВІДОМЛЕННЯ (КРАСИВИЙ ДИЗАЙН) ----------
 async def send_flight_message(channel, status, f, details_type="ongoing"):
     # 1. Дані
     cs = f.get("flightNumber") or f.get("callsign") or "N/A"
     airline = f.get("airline", {}).get("icao", "")
     full_cs = f"{airline} {cs}" if airline else cs
     
-    dep = f.get("dep", {}).get("icao", "????")
-    arr = f.get("arr", {}).get("icao", "????")
+    # Аеропорти
+    dep_icao = f.get("dep", {}).get("icao", "????")
+    dep_name = clean_airport_name(f.get("dep", {}).get("name"))
+    arr_icao = f.get("arr", {}).get("icao", "????")
+    arr_name = clean_airport_name(f.get("arr", {}).get("name"))
+    
     ac = f.get("aircraft", {}).get("airframe", {}).get("name", "A/C")
     pilot = f.get("pilot", {}).get("fullname", "Pilot")
     
@@ -88,41 +110,40 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 
     embed = None
 
-    # --- 1. ВЗЛІТ ---
+    # === 1. ВЗЛІТ ===
     if status == "Departed":
         delay = f.get("delay", 0)
         
-        # Рядки за твоїм списком
+        # Використовуємо \n\n для відступів і ** ** для жирності
         desc = (
-            f"{get_flag(dep)} **{dep}** ➡️ {get_flag(arr)} **{arr}**\n"
-            f"✈️ {ac}\n"
-            f"{get_timing(delay)}\n"
-            f"👨‍✈️ {pilot}\n"
-            f"👫 {pax} / 📦 {cargo} kg"
+            f"{get_flag(dep_icao)} **{dep_icao}** ({dep_name}) ➡️ {get_flag(arr_icao)} **{arr_icao}** ({arr_name})\n\n"
+            f"✈️ **{ac}**\n\n"
+            f"{get_timing(delay)}\n\n"
+            f"👨‍✈️ **{pilot}**\n\n"
+            f"👫 **{pax}** Pax  |  📦 **{cargo}** kg"
         )
         
-        embed = discord.Embed(title=f"🛫 {full_cs} departed", description=desc, color=0x3498db) # Синій
+        embed = discord.Embed(title=f"🛫 {full_cs} Departed", description=desc, color=0x3498db)
 
-    # --- 2. ПОСАДКА ---
+    # === 2. ПОСАДКА ===
     elif status == "Arrived":
         fpm = f.get("lastState", {}).get("speed", {}).get("touchDownRate", 0)
-        if fpm == 0 and details_type == "test": fpm = -152 # Для тесту
+        if fpm == 0 and details_type == "test": fpm = -152
         
         delay = f.get("delay", 0)
         
-        # Рядки за твоїм списком
         desc = (
-            f"{get_flag(dep)} **{dep}** ➡️ {get_flag(arr)} **{arr}**\n"
-            f"✈️ {ac}\n"
-            f"{get_timing(delay)}\n"
-            f"📉 {int(fpm)} fpm\n"
-            f"👨‍✈️ {pilot}\n"
-            f"👫 {pax} / 📦 {cargo} kg"
+            f"{get_flag(dep_icao)} **{dep_icao}** ({dep_name}) ➡️ {get_flag(arr_icao)} **{arr_icao}** ({arr_name})\n\n"
+            f"✈️ **{ac}**\n\n"
+            f"{get_timing(delay)}\n\n"
+            f"📉 **{int(fpm)} fpm**\n\n"
+            f"👨‍✈️ **{pilot}**\n\n"
+            f"👫 **{pax}** Pax  |  📦 **{cargo}** kg"
         )
 
-        embed = discord.Embed(title=f"🛬 {full_cs} arrived", description=desc, color=0x3498db) # Синій
+        embed = discord.Embed(title=f"🛬 {full_cs} Arrived", description=desc, color=0x3498db)
 
-    # --- 3. ЗВІТ (CLOSED) ---
+    # === 3. ЗВІТ (CLOSED) ===
     elif status == "Completed":
         net_data = f.get("network")
         net = (net_data.get("name") if isinstance(net_data, dict) else str(net_data)) or "OFFLINE"
@@ -133,19 +154,18 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         income = t.get("revenue", 0)
         rating = f.get("rating", 0)
 
-        # Рядки за твоїм списком
         desc = (
-            f"{get_flag(dep)} **{dep}** ➡️ {get_flag(arr)} **{arr}**\n"
-            f"✈️ {ac}\n"
-            f"👨‍✈️ {pilot}\n"
-            f"🌐 {net.upper()}\n"
-            f"👫 {pax} / 📦 {cargo} kg\n"
-            f"📏 {dist} nm / ⏱️ {format_time(ftime)}\n"
-            f"💰 {income} $\n"
-            f"⭐ {rating}"
+            f"{get_flag(dep_icao)} **{dep_icao}** ({dep_name}) ➡️ {get_flag(arr_icao)} **{arr_icao}** ({arr_name})\n\n"
+            f"✈️ **{ac}**\n\n"
+            f"👨‍✈️ **{pilot}**\n\n"
+            f"🌐 **{net.upper()}**\n\n"
+            f"👫 **{pax}** Pax  |  📦 **{cargo}** kg\n\n"
+            f"📏 **{dist}** nm  |  ⏱️ **{format_time(ftime)}**\n\n"
+            f"💰 **{income} $**\n\n"
+            f"{get_rating_square(rating)} **{rating}**"
         )
 
-        embed = discord.Embed(title=f"😎 {full_cs} completed", description=desc, color=0x2ecc71) # Зелений (або темний 0x2f3136)
+        embed = discord.Embed(title=f"😎 {full_cs} Completed", description=desc, color=0x2ecc71) # Зелений
 
     if embed:
         await channel.send(embed=embed)
@@ -155,16 +175,17 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 async def on_message(message):
     if message.author == client.user: return
     if message.content == "!test":
-        await message.channel.send("🛠️ **Test Embeds:**")
+        await message.channel.send("✨ **Генерація тестових звітів...**")
         mock = {
             "flightNumber": "TEST1", "airline": {"icao": "OSA"},
-            "dep": {"icao": "UKKK"}, "arr": {"icao": "UKBB"},
+            "dep": {"icao": "UKKK", "name": "Ihor Sikorsky Kyiv International Airport"},
+            "arr": {"icao": "UKBB", "name": "Boryspil International Airport"},
             "aircraft": {"airframe": {"name": "Boeing 737-800"}},
             "pilot": {"fullname": "Test Pilot"},
             "payload": {"pax": 100, "cargo": 1500},
             "delay": -3, "network": {"name": "VATSIM"},
             "lastState": {"speed": {"touchDownRate": -145}},
-            "result": {"totals": {"distance": 30, "time": 15, "revenue": 2000, "payload": {"pax": 100, "cargo": 1500}}},
+            "result": {"totals": {"distance": 350, "time": 55, "revenue": 2500, "payload": {"pax": 100, "cargo": 1500}}},
             "rating": 9.9
         }
         await send_flight_message(message.channel, "Departed", mock, "test")
@@ -216,7 +237,6 @@ async def main_loop():
                         if not det or "flight" not in det: continue
                         f = det["flight"]
                         
-                        # Перевірка на валідність
                         cs = f.get("flightNumber") or f.get("callsign") or "N/A"
                         if cs == "N/A": continue
 
