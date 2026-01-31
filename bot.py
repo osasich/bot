@@ -29,20 +29,24 @@ def load_state():
     except: return {}
 
 def save_state(state):
-    # Тримаємо файл невеликим
     if len(state) > 100: state = dict(list(state.items())[-50:])
     STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
 
 def get_flag(icao):
     if not icao: return "🏳️"
+    icao = str(icao) # Захист від помилок
     m = {"UK": "ua", "EP": "pl", "ED": "de", "LF": "fr", "EG": "gb", "EH": "nl", "LI": "it", "LE": "es", "LO": "at", "KJ": "us", "UU": "ru", "UR": "ru"}
     return f":flag_{m.get(icao[:2], 'white')}:"
 
 def get_timing(delay):
     if delay is None: return "⏱️ Невідомо"
-    if delay > 5: return f"🔴 Затримка (+{delay} хв)"
-    if delay < -5: return f"🟡 Раніше на {-delay} хв"
-    return "🟢 Вчасно"
+    try:
+        d = float(delay)
+        if d > 5: return f"🔴 Затримка (+{int(d)} хв)"
+        if d < -5: return f"🟡 Раніше на {-int(d)} хв"
+        return "🟢 Вчасно"
+    except:
+        return "⏱️ Невідомо"
 
 # ---------- API КЛІЄНТ ----------
 async def fetch_api(session, path, method="GET", body=None):
@@ -82,11 +86,11 @@ async def main_loop():
                         
                         state.setdefault(fid, {})
                         
-                        # Дані з Ongoing
-                        cs = f.get("callsign", "N/A")
-                        dep = f.get("departure", {}).get("icao", "????")
-                        arr = f.get("arrival", {}).get("icao", "????")
-                        ac = f.get("aircraft", {}).get("airframe", {}).get("ident", "A/C")
+                        # Безпечний збір даних
+                        cs = f.get("callsign") or "N/A"
+                        dep = f.get("departure", {}).get("icao") or "????"
+                        arr = f.get("arrival", {}).get("icao") or "????"
+                        ac = f.get("aircraft", {}).get("airframe", {}).get("ident") or "A/C"
                         delay = f.get("delay")
                         
                         # -- ВЗЛІТ (DEPARTED) --
@@ -97,7 +101,7 @@ async def main_loop():
                             cargo = f.get("cargo", 0)
                             
                             if det and "flight" in det:
-                                pilot = det["flight"].get("pilot", {}).get("fullname", "Pilot")
+                                pilot = det["flight"].get("pilot", {}).get("fullname") or "Pilot"
 
                             msg = (
                                 f"🛫 **{cs} departed**\n"
@@ -119,7 +123,7 @@ async def main_loop():
                             cargo = f.get("cargo", 0)
 
                             if det and "flight" in det:
-                                pilot = det["flight"].get("pilot", {}).get("fullname", "Pilot")
+                                pilot = det["flight"].get("pilot", {}).get("fullname") or "Pilot"
                                 fpm = det["flight"].get("lastState", {}).get("speed", {}).get("touchDownRate", "N/A")
 
                             msg = (
@@ -148,21 +152,23 @@ async def main_loop():
                             if det and "flight" in det:
                                 fl = det["flight"]
                                 
-                                # --- ВИПРАВЛЕННЯ ПОМИЛКИ З МЕРЕЖЕЮ ---
-                                raw_net = fl.get("network", "OFFLINE")
+                                # --- ВИПРАВЛЕННЯ ДЛЯ МЕРЕЖІ (ТУТ БУЛА ПОМИЛКА) ---
+                                raw_net = fl.get("network")
                                 if isinstance(raw_net, dict):
-                                    # Якщо це словник, беремо 'name' або 'code'
-                                    net = raw_net.get("name", "NETWORK").upper()
-                                else:
-                                    # Якщо це рядок або щось інше
+                                    # Якщо це словник, беремо 'name', якщо null -> 'OFFLINE'
+                                    net_val = raw_net.get("name") or raw_net.get("code") or "OFFLINE"
+                                    net = str(net_val).upper()
+                                elif raw_net:
                                     net = str(raw_net).upper()
-                                # -------------------------------------
+                                else:
+                                    net = "OFFLINE"
+                                # --------------------------------------------------
 
-                                cs = fl.get("callsign", "N/A")
-                                dep = fl.get("departure", {}).get("icao", "????")
-                                arr = fl.get("arrival", {}).get("icao", "????")
-                                ac = fl.get("aircraft", {}).get("airframe", {}).get("ident", "A/C")
-                                pilot = fl.get("pilot", {}).get("fullname", "Pilot")
+                                cs = fl.get("callsign") or "N/A"
+                                dep = fl.get("departure", {}).get("icao") or "????"
+                                arr = fl.get("arrival", {}).get("icao") or "????"
+                                ac = fl.get("aircraft", {}).get("airframe", {}).get("ident") or "A/C"
+                                pilot = fl.get("pilot", {}).get("fullname") or "Pilot"
                                 pax = fl.get("pax", 0)
                                 cargo = fl.get("cargo", 0)
                                 dist = fl.get("distance", 0)
@@ -187,7 +193,7 @@ async def main_loop():
                 save_state(state)
 
             except Exception as e:
-                logging.error(f"ПОМИЛКА В ЦИКЛІ: {e}")
+                logging.error(f"Критична помилка: {e}")
             
             await asyncio.sleep(CHECK_INTERVAL)
 
