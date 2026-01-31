@@ -4,175 +4,57 @@ import asyncio
 import json
 import os
 import logging
-from pathlib import Path
 
-# ---------- НАЛАШТУВАННЯ ----------
+# Змінні
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
 NEWSKY_API_KEY = os.getenv("NEWSKY_API_KEY")
 
-STATE_FILE = Path("sent.json")
-CHECK_INTERVAL = 20 # Перевіряємо частіше
+# Налаштування
 BASE_URL = "https://newsky.app/api/airline-api"
 HEADERS = {"Authorization": f"Bearer {NEWSKY_API_KEY}"}
 
 logging.basicConfig(level=logging.INFO)
-intents = discord.Intents.default()
-client = discord.Client(intents=intents)
-
-def load_state():
-    if not STATE_FILE.exists(): return {}
-    try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    except: return {}
-
-def save_state(state):
-    try:
-        if len(state) > 100: state = dict(list(state.items())[-50:])
-        STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
-    except: pass
-
-def get_flag(icao):
-    if not icao or icao == "????": return "🏳️"
-    m = {"UK": "ua", "EP": "pl", "ED": "de", "LF": "fr", "EG": "gb", "EH": "nl", "LI": "it", "LE": "es", "LO": "at", "KJ": "us", "UU": "ru", "UR": "ru"}
-    return f":flag_{m.get(str(icao)[:2], 'white')}:"
-
-def get_timing(delay):
-    if delay is None: return "⏱️ Невідомо"
-    try:
-        d = float(delay)
-        if d > 5: return f"🔴 Затримка (+{int(d)} хв)"
-        if d < -5: return f"🟡 Раніше на {-int(d)} хв"
-        return "🟢 Вчасно"
-    except: return "⏱️ Невідомо"
-
-async def fetch_api(session, path, method="GET", body=None):
-    url = f"{BASE_URL}{path}"
-    try:
-        async with session.request(method, url, headers=HEADERS, json=body, timeout=10) as r:
-            if r.status == 200: return await r.json()
-            print(f"⚠️ API API Newsky повернув помилку: {r.status}")
-            return None
-    except Exception as e:
-        print(f"⚠️ Помилка з'єднання: {e}")
-        return None
+client = discord.Client(intents=discord.Intents.default())
 
 @client.event
 async def on_ready():
-    print(f"✅ Бот онлайн: {client.user}")
-    client.loop.create_task(main_loop())
-
-async def main_loop():
-    await client.wait_until_ready()
-    channel = client.get_channel(CHANNEL_ID)
-    if not channel:
-        try: channel = await client.fetch_channel(CHANNEL_ID)
-        except: print(f"❌ КРИТИЧНО: Не можу знайти канал {CHANNEL_ID}"); return
-
-    state = load_state()
-    print("🚀 Цикл запущено. Чекаю даних від Newsky...")
-
+    print(f"🕵️ ШПИГУН ОНЛАЙН: {client.user}")
+    print("⏳ Чекаю 5 секунд перед запитом...")
+    await asyncio.sleep(5)
+    
     async with aiohttp.ClientSession() as session:
-        while True:
-            try:
-                # 1. ПЕРЕВІРКА ONGOING
-                ongoing = await fetch_api(session, "/flights/ongoing")
-                if ongoing is not None:
-                    flights = ongoing.get("results", [])
-                    print(f"📡 API Ongoing: знайдено {len(flights)} польотів.")
+        print("\n" + "="*40)
+        print("📡 ЗАПИТ 1: /flights/ongoing (Список активних)")
+        print("="*40)
+        
+        async with session.get(f"{BASE_URL}/flights/ongoing", headers=HEADERS) as r:
+            if r.status == 200:
+                data = await r.json()
+                # Друкуємо повну структуру JSON
+                print(json.dumps(data, indent=2, ensure_ascii=False))
+                
+                # Якщо є хоч один політ, беремо його ID і копаємо глибше
+                if data.get("results") and len(data["results"]) > 0:
+                    first_flight = data["results"][0]
+                    # Пробуємо знайти ID (він може бути _id або id)
+                    fid = first_flight.get("_id") or first_flight.get("id")
                     
-                    for f in flights:
-                        fid = str(f.get("_id") or f.get("id"))
-                        cs = f.get("callsign", "N/A")
-                        
-                        # ДЕБАГ ІНФО
-                        print(f"   ✈️ Рейс {cs} (ID: {fid}) | Takeoff: {bool(f.get('takeoffTimeAct'))} | Landed: {bool(f.get('arrTimeAct'))}")
+                    if fid:
+                        print("\n" + "="*40)
+                        print(f"🔬 ЗАПИТ 2: /flight/{fid} (Деталі польоту)")
+                        print("="*40)
+                        async with session.get(f"{BASE_URL}/flight/{fid}", headers=HEADERS) as r2:
+                            det = await r2.json()
+                            print(json.dumps(det, indent=2, ensure_ascii=False))
+                    else:
+                        print("❌ Не знайдено ID польоту в списку ongoing")
+                else:
+                    print("⚠️ Список ongoing порожній (API каже, що ніхто не летить)")
+            else:
+                print(f"❌ Помилка запиту ongoing: {r.status}")
+                print(await r.text())
 
-                        state.setdefault(fid, {})
-                        
-                        # ЗБІР ДАНИХ
-                        dep = f.get("departure", {}).get("icao") or "????"
-                        arr = f.get("arrival", {}).get("icao") or "????"
-                        ac = f.get("aircraft", {}).get("airframe", {}).get("ident") or "A/C"
-                        delay = f.get("delay")
-
-                        # ЛОГІКА ВЗЛІТ
-                        if f.get("takeoffTimeAct") and not state[fid].get("takeoff"):
-                            print(f"      🔔 Відправляю TAKEOFF для {cs}")
-                            det = await fetch_api(session, f"/flight/{fid}")
-                            pilot = det["flight"].get("pilot", {}).get("fullname", "Pilot") if det else "Pilot"
-                            pax = f.get("pax", 0)
-                            cargo = f.get("cargo", 0)
-                            
-                            msg = (f"🛫 **{cs} departed**\n{get_flag(dep)}{dep} ➡️ {get_flag(arr)}{arr}\n"
-                                   f"✈️ {ac}\n🕒 {get_timing(delay)}\n👨‍✈️ {pilot}\n📦 {pax} Pax / {cargo} kg Cargo")
-                            await channel.send(msg)
-                            state[fid]["takeoff"] = True
-
-                        # ЛОГІКА ПОСАДКА
-                        if f.get("arrTimeAct") and not state[fid].get("landing"):
-                            print(f"      🔔 Відправляю LANDING для {cs}")
-                            det = await fetch_api(session, f"/flight/{fid}")
-                            pilot = det["flight"].get("pilot", {}).get("fullname", "Pilot") if det else "Pilot"
-                            fpm = det["flight"].get("lastState", {}).get("speed", {}).get("touchDownRate", "N/A") if det else "N/A"
-                            pax = f.get("pax", 0)
-                            cargo = f.get("cargo", 0)
-
-                            msg = (f"🛬 **{cs} arrived**\n{get_flag(dep)}{dep} ➡️ {get_flag(arr)}{arr}\n"
-                                   f"✈️ {ac}\n🕒 {get_timing(delay)}\n📉 {fpm} FPM\n👨‍✈️ {pilot}\n📦 {pax} Pax / {cargo} kg Cargo")
-                            await channel.send(msg)
-                            state[fid]["landing"] = True
-
-                # 2. ПЕРЕВІРКА RECENT (Завершені)
-                recent = await fetch_api(session, "/flights/recent", method="POST", body={"count": 5})
-                if recent is not None:
-                    r_flights = recent.get("results", [])
-                    # print(f"📡 API Recent: перевірка {len(r_flights)} останніх записів.") # Розкоментуй якщо треба
-                    
-                    for f in r_flights:
-                        fid = str(f.get("_id") or f.get("id"))
-                        # Якщо вже відправили або рейс не закритий - пропускаємо
-                        if state.get(fid, {}).get("completed") or not f.get("close"):
-                            continue
-                        
-                        print(f"   😎 Знайдено завершений рейс {f.get('callsign')} - готую звіт.")
-                        
-                        det = await fetch_api(session, f"/flight/{fid}")
-                        if not det or "flight" not in det: continue
-                        
-                        fl = det["flight"]
-                        cs = fl.get("callsign", "N/A")
-                        
-                        # ФІЛЬТР ПУСТИХ
-                        if cs == "N/A": 
-                            print("      ⚠️ Пропущено (немає позивного)")
-                            continue
-
-                        # ДАНІ
-                        dep = fl.get("departure", {}).get("icao") or "????"
-                        arr = fl.get("arrival", {}).get("icao") or "????"
-                        ac = fl.get("aircraft", {}).get("airframe", {}).get("ident") or "A/C"
-                        pilot = fl.get("pilot", {}).get("fullname") or "Pilot"
-                        
-                        raw_net = fl.get("network")
-                        if isinstance(raw_net, dict): net = str(raw_net.get("name") or "OFFLINE").upper()
-                        else: net = str(raw_net or "OFFLINE").upper()
-                        
-                        msg = (f"😎 **{cs} completed**\n{get_flag(dep)}{dep} ➡️ {get_flag(arr)}{arr}\n"
-                               f"✈️ {ac}\n👨‍✈️ {pilot}\n🌐 {net}\n"
-                               f"📦 {fl.get('pax', 0)} Pax / {fl.get('cargo', 0)} kg Cargo\n"
-                               f"📏 {fl.get('distance', 0)} nm / ⏱️ {fl.get('flightTime', 0)} min\n"
-                               f"💰 {fl.get('finances', {}).get('totalIncome', 0)}$\n"
-                               f"⭐ {fl.get('rating', '0.00')}")
-                        
-                        await channel.send(msg)
-                        state.setdefault(fid, {})["completed"] = True
-                        print(f"      ✅ Звіт відправлено!")
-
-                save_state(state)
-            except Exception as e:
-                print(f"❌ ПОМИЛКА: {e}")
-            
-            await asyncio.sleep(CHECK_INTERVAL)
+    print("\n🏁 Діагностику завершено.")
+    await client.close()
 
 client.run(DISCORD_TOKEN)
