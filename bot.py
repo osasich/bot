@@ -4,294 +4,101 @@ import asyncio
 import json
 import os
 import logging
-import re
-import random  # <--- Додано для випадкових чисел
 from pathlib import Path
 
-# ---------- SETTINGS ----------
+# ---------- НАЛАШТУВАННЯ ----------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
 NEWSKY_API_KEY = os.getenv("NEWSKY_API_KEY")
-
-STATE_FILE = Path("sent.json")
-CHECK_INTERVAL = 20
 BASE_URL = "https://newsky.app/api/airline-api"
 HEADERS = {"Authorization": f"Bearer {NEWSKY_API_KEY}"}
 
 logging.basicConfig(level=logging.INFO)
-intents = discord.Intents.default()
-intents.message_content = True
-client = discord.Client(intents=intents)
+client = discord.Client(intents=discord.Intents.default())
 
-# ---------- HELPERS ----------
-def load_state():
-    if not STATE_FILE.exists(): return {}
-    try: return json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    except: return {}
-
-def save_state(state):
+async def fetch_api(session, path):
     try:
-        if len(state) > 100: state = dict(list(state.items())[-50:])
-        STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
-    except: pass
+        async with session.get(f"{BASE_URL}{path}", headers=HEADERS) as r:
+            if r.status == 200: return await r.json()
+    except Exception as e:
+        print(f"❌ API Error: {e}")
+    return None
 
-def clean_airport_name(name):
-    if not name: return ""
-    name = re.sub(r"\(.*?\)", "", name)
-    removals = ["International", "Regional", "Airport", "Aerodrome", "Air Base", "Intl", "  "]
-    for word in removals:
-        name = name.replace(word, "")
-    return name.strip()
-
-def get_flag(icao):
-    if not icao or len(icao) < 2: return "🏳️"
-    icao = icao.upper()
-    prefixes = {
-        'UK': 'UA', 'KJ': 'US', 'K': 'US', 'C': 'CA', 'Y': 'AU', 'Z': 'CN',
-        'EG': 'GB', 'LF': 'FR', 'ED': 'DE', 'ET': 'DE', 'LI': 'IT', 'LE': 'ES',
-        'EP': 'PL', 'LK': 'CZ', 'LH': 'HU', 'LO': 'AT', 'LS': 'CH', 'EB': 'BE',
-        'EH': 'NL', 'EK': 'DK', 'EN': 'NO', 'ES': 'SE', 'EF': 'FI', 'LT': 'TR',
-        'LG': 'GR', 'U': 'RU', 'UM': 'BY', 'UB': 'AZ', 'UG': 'GE', 'UD': 'AM',
-        'UA': 'KZ', 'O': 'SA', 'V': 'IN', 'W': 'ID', 'F': 'ZA', 'S': 'BR',
-        'RJ': 'JP', 'RO': 'JP', 'OM': 'AE', 'ZB': 'CN'
-    }
-    iso = prefixes.get(icao[:2]) or prefixes.get(icao[:1])
-    if not iso: return "🏳️"
-    return "".join([chr(ord(c) + 127397) for c in iso])
-
-def get_timing(delay):
-    try:
-        d = float(delay)
-        if d > 5: return f"🔴 **Delay** (+{int(d)} min)"
-        if d < -5: return f"🟡 **Early** ({int(d)} min)"
-        return "🟢 **On time**"
-    except: return "⏱️ **N/A**"
-
-def format_time(minutes):
-    if not minutes: return "00:00"
-    return f"{int(minutes // 60):02d}:{int(minutes % 60):02d}"
-
-def get_rating_square(rating):
-    try:
-        r = float(rating)
-        if r >= 9.5: return "🟩"
-        if r >= 8.0: return "🟨"
-        if r >= 5.0: return "🟧"
-        return "🟥"
-    except: return "⬜"
-
-async def fetch_api(session, path, method="GET", body=None):
-    try:
-        async with session.request(method, f"{BASE_URL}{path}", headers=HEADERS, json=body, timeout=10) as r:
-            return await r.json() if r.status == 200 else None
-    except: return None
-
-# ---------- MESSAGE GENERATOR ----------
-async def send_flight_message(channel, status, f, details_type="ongoing"):
-    # 1. Basic Data
-    cs = f.get("flightNumber") or f.get("callsign") or "N/A"
-    airline = f.get("airline", {}).get("icao", "")
-    full_cs = f"{airline} {cs}" if airline else cs
-    
-    dep_icao = f.get("dep", {}).get("icao", "????")
-    dep_name = clean_airport_name(f.get("dep", {}).get("name"))
-    
-    arr_icao = f.get("arr", {}).get("icao", "????")
-    arr_name = clean_airport_name(f.get("arr", {}).get("name"))
-    
-    ac = f.get("aircraft", {}).get("airframe", {}).get("name", "A/C")
-    pilot = f.get("pilot", {}).get("fullname", "Pilot")
-    
-    # Payload
-    if details_type == "result":
-        pax = f.get("result", {}).get("totals", {}).get("payload", {}).get("pax", 0)
-        cargo = f.get("result", {}).get("totals", {}).get("payload", {}).get("cargo", 0)
-    else:
-        pax = f.get("payload", {}).get("pax", 0)
-        cargo = f.get("payload", {}).get("cargo", 0)
-
-    embed = None
-
-    # === 1. DEPARTED ===
-    if status == "Departed":
-        delay = f.get("delay", 0)
-        
-        desc = (
-            f"{get_flag(dep_icao)} **{dep_icao}** ({dep_name}) ➡️ {get_flag(arr_icao)} **{arr_icao}** ({arr_name})\n\n"
-            f"✈️ **{ac}**\n\n"
-            f"{get_timing(delay)}\n\n"
-            f"👨‍✈️ **{pilot}**\n\n"
-            f"👫 **{pax}** Pax  |  📦 **{cargo}** kg"
-        )
-        
-        embed = discord.Embed(title=f"🛫 {full_cs} departed", description=desc, color=0x3498db)
-
-    # === 2. ARRIVED ===
-    elif status == "Arrived":
-        delay = f.get("delay", 0)
-        
-        desc = (
-            f"{get_flag(dep_icao)} **{dep_icao}** ({dep_name}) ➡️ {get_flag(arr_icao)} **{arr_icao}** ({arr_name})\n\n"
-            f"✈️ **{ac}**\n\n"
-            f"{get_timing(delay)}\n\n"
-            f"👨‍✈️ **{pilot}**\n\n"
-            f"👫 **{pax}** Pax  |  📦 **{cargo}** kg"
-        )
-
-        embed = discord.Embed(title=f"🛬 {full_cs} arrived", description=desc, color=0x3498db)
-
-    # === 3. COMPLETED ===
-    elif status == "Completed":
-        net_data = f.get("network")
-        net = (net_data.get("name") if isinstance(net_data, dict) else str(net_data)) or "OFFLINE"
-        
-        t = f.get("result", {}).get("totals", {})
-        dist = t.get("distance", 0)
-        ftime = t.get("time", 0)
-        income = t.get("revenue", 0)
-        rating = f.get("rating", 0.0)
-        
-        # FPM extraction
-        final_fpm = f.get("lastState", {}).get("speed", {}).get("touchDownRate", 0)
-        if final_fpm == 0 and details_type == "test": final_fpm = -random.randint(60, 400) # Mock FPM
-
-        desc = (
-            f"{get_flag(dep_icao)} **{dep_icao}** ({dep_name}) ➡️ {get_flag(arr_icao)} **{arr_icao}** ({arr_name})\n\n"
-            f"✈️ **{ac}**\n\n"
-            f"👨‍✈️ **{pilot}**\n\n"
-            f"🌐 **{net.upper()}**\n\n"
-            f"📉 **{int(final_fpm)} fpm**\n\n" 
-            f"👫 **{pax}** Pax  |  📦 **{cargo}** kg\n\n"
-            f"📏 **{dist}** nm  |  ⏱️ **{format_time(ftime)}**\n\n"
-            f"💰 **{income} $**\n\n"
-            f"{get_rating_square(rating)} **{rating}**"
-        )
-
-        embed = discord.Embed(title=f"😎 {full_cs} completed", description=desc, color=0x2ecc71)
-
-    if embed:
-        await channel.send(embed=embed)
-
-# ---------- TEST COMMAND (RANDOM GENERATOR) ----------
 @client.event
-async def on_message(message):
-    if message.author == client.user: return
+async def on_ready():
+    print(f"🕵️ FPM SPY OONLINE: {client.user}")
+    print("⏳ Чекаю на посадку...")
     
-    if message.content == "!test":
-        await message.channel.send("🎲 **Generating Random Flight Report...**")
-        
-        # Database for randomization
-        airports = [
-            {"icao": "UKKK", "name": "Kyiv Zhuliany"}, {"icao": "UKBB", "name": "Boryspil"},
-            {"icao": "KJFK", "name": "JFK New York"}, {"icao": "EGLL", "name": "London Heathrow"},
-            {"icao": "EDDF", "name": "Frankfurt"}, {"icao": "OMDB", "name": "Dubai Intl"},
-            {"icao": "RJTT", "name": "Tokyo Haneda"}, {"icao": "EPWA", "name": "Warsaw Chopin"},
-            {"icao": "LFPG", "name": "Paris CDG"}, {"icao": "LTFM", "name": "Istanbul"}
-        ]
-        planes = ["Boeing 737-800", "Airbus A320", "Cessna 172", "Boeing 777-300ER", "CRJ-900"]
-        pilots = ["Captain Jack", "Nazar Pilot", "Sky Walker", "Maverick", "Goose"]
-        networks = ["VATSIM", "IVAO", "OFFLINE", "POSCON"]
-        
-        # Random Selections
-        dep = random.choice(airports)
-        arr = random.choice(airports)
-        while arr == dep: arr = random.choice(airports) # Ensure route
-        
-        pax_rnd = random.randint(50, 200)
-        cargo_rnd = random.randint(500, 5000)
-        dist_rnd = random.randint(200, 4000)
-        time_rnd = int(dist_rnd / 7 + random.randint(10, 30))
-        delay_rnd = random.randint(-20, 45) # -20 early, +45 late
-        fpm_rnd = -random.randint(50, 600) # Landing rate
-        score_rnd = round(random.uniform(5.0, 10.0), 2)
-        income_rnd = random.randint(-500, 5000)
-        
-        mock = {
-            "flightNumber": f"{random.randint(10, 999)}T", 
-            "airline": {"icao": "OSA"},
-            "dep": dep, 
-            "arr": arr,
-            "aircraft": {"airframe": {"name": random.choice(planes)}},
-            "pilot": {"fullname": random.choice(pilots)},
-            "payload": {"pax": pax_rnd, "cargo": cargo_rnd},
-            "delay": delay_rnd,
-            "network": {"name": random.choice(networks)},
-            "lastState": {"speed": {"touchDownRate": fpm_rnd}},
-            "result": {
-                "totals": {
-                    "distance": dist_rnd, 
-                    "time": time_rnd, 
-                    "revenue": income_rnd, 
-                    "payload": {"pax": pax_rnd, "cargo": cargo_rnd}
-                }
-            },
-            "rating": score_rnd
-        }
-        
-        # Simulation sequence
-        await send_flight_message(message.channel, "Departed", mock, "test")
-        await asyncio.sleep(2)
-        await send_flight_message(message.channel, "Arrived", mock, "test")
-        await asyncio.sleep(2)
-        await send_flight_message(message.channel, "Completed", mock, "test")
-
-# ---------- MAIN LOOP ----------
-async def main_loop():
-    await client.wait_until_ready()
-    channel = client.get_channel(CHANNEL_ID)
-    state = load_state()
+    # Змінна щоб не спамити логами
+    landed_flag = False
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # 1. Active Flights
+                # 1. Шукаємо активний політ
                 ongoing = await fetch_api(session, "/flights/ongoing")
-                if ongoing and "results" in ongoing:
-                    for raw_f in ongoing["results"]:
-                        fid = str(raw_f.get("_id") or raw_f.get("id"))
-                        det = await fetch_api(session, f"/flight/{fid}")
-                        if not det or "flight" not in det: continue
+                
+                if ongoing and "results" in ongoing and len(ongoing["results"]) > 0:
+                    raw_f = ongoing["results"][0]
+                    fid = raw_f.get("_id") or raw_f.get("id")
+                    
+                    # Качаємо деталі
+                    det = await fetch_api(session, f"/flight/{fid}")
+                    if det and "flight" in det:
                         f = det["flight"]
+                        cs = f.get("flightNumber") or "N/A"
                         
-                        cs = f.get("flightNumber") or f.get("callsign") or "N/A"
-                        if cs == "N/A": continue
+                        # Перевіряємо статус
+                        is_landed = f.get("arrTimeAct") is not None
                         
-                        state.setdefault(fid, {})
+                        # Якщо тільки що сів (або ми вперше побачили посадку)
+                        if is_landed and not landed_flag:
+                            print("\n" + "="*50)
+                            print(f"🛬 DETECTED LANDING: {cs}")
+                            print("="*50)
+                            
+                            # --- ЕТАП 1: МИТТЄВИЙ ЗАПИТ ---
+                            print("⏱️ T+0 sec (Миттєво):")
+                            speed_data = f.get("lastState", {}).get("speed", {})
+                            print(f"   📉 lastState.speed: {json.dumps(speed_data, indent=2)}")
+                            print(f"   📄 Raw FPM field: {speed_data.get('touchDownRate')}")
+                            print(f"   ↕️ Vertical Speed (vs): {speed_data.get('vs')}")
+                            
+                            # --- ЕТАП 2: ЧЕРЕЗ 5 СЕКУНД ---
+                            print("\n⏳ Чекаю 5 секунд, щоб сервер оновив дані...")
+                            await asyncio.sleep(5)
+                            
+                            det_5s = await fetch_api(session, f"/flight/{fid}")
+                            f_5s = det_5s["flight"]
+                            speed_5s = f_5s.get("lastState", {}).get("speed", {})
+                            
+                            print("⏱️ T+5 sec:")
+                            print(f"   📉 lastState.speed: {json.dumps(speed_5s, indent=2)}")
+                            print(f"   📄 Raw FPM field: {speed_5s.get('touchDownRate')}")
+                            
+                            # --- ЕТАП 3: ЧЕРЕЗ 10 СЕКУНД ---
+                            print("\n⏳ Чекаю ще 5 секунд...")
+                            await asyncio.sleep(5)
+                            
+                            det_10s = await fetch_api(session, f"/flight/{fid}")
+                            f_10s = det_10s["flight"]
+                            speed_10s = f_10s.get("lastState", {}).get("speed", {})
+                            
+                            print("⏱️ T+10 sec:")
+                            print(f"   📉 lastState.speed: {json.dumps(speed_10s, indent=2)}")
+                            print(f"   📄 Raw FPM field: {speed_10s.get('touchDownRate')}")
+                            
+                            landed_flag = True # Більше не реагуємо на цей рейс
+                            print("\n✅ Діагностику завершено. Скинь ці логи!")
 
-                        if f.get("takeoffTimeAct") and not state[fid].get("takeoff"):
-                            await send_flight_message(channel, "Departed", f, "ongoing")
-                            state[fid]["takeoff"] = True
+                        elif not is_landed:
+                            # Просто показуємо що бот живий і бачить політ
+                            alt = f.get("lastState", {}).get("location", {}).get("alt", 0)
+                            print(f"✈️ У польоті: {cs} | Alt: {alt} ft | Чекаю на посадку...", end="\r")
+                            landed_flag = False # Скидаємо прапор якщо новий рейс
 
-                        if f.get("arrTimeAct") and not state[fid].get("landing"):
-                            await send_flight_message(channel, "Arrived", f, "ongoing")
-                            state[fid]["landing"] = True
-
-                # 2. Completed Flights
-                recent = await fetch_api(session, "/flights/recent", method="POST", body={"count": 5})
-                if recent and "results" in recent:
-                    for raw_f in recent["results"]:
-                        fid = str(raw_f.get("_id") or raw_f.get("id"))
-                        if fid in state and state[fid].get("completed"): continue
-                        if not raw_f.get("close"): continue
-
-                        det = await fetch_api(session, f"/flight/{fid}")
-                        if not det or "flight" not in det: continue
-                        f = det["flight"]
-                        
-                        cs = f.get("flightNumber") or f.get("callsign") or "N/A"
-                        if cs == "N/A": continue
-
-                        await send_flight_message(channel, "Completed", f, "result")
-                        state.setdefault(fid, {})["completed"] = True
-
-                save_state(state)
-            except Exception as e: print(f"Loop Error: {e}")
-            await asyncio.sleep(CHECK_INTERVAL)
-
-@client.event
-async def on_ready():
-    print(f"✅ Bot online: {client.user}")
-    print("🚀 MONITORING STARTED")
-    client.loop.create_task(main_loop())
+            except Exception as e:
+                print(f"Error: {e}")
+            
+            await asyncio.sleep(2)
 
 client.run(DISCORD_TOKEN)
