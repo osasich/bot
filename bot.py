@@ -18,7 +18,7 @@ HEADERS = {"Authorization": f"Bearer {NEWSKY_API_KEY}"}
 
 logging.basicConfig(level=logging.INFO)
 intents = discord.Intents.default()
-intents.message_content = True # Потрібно для читання команд
+intents.message_content = True
 client = discord.Client(intents=intents)
 
 # ---------- ДОПОМІЖНІ ФУНКЦІЇ ----------
@@ -66,11 +66,8 @@ async def fetch_api(session, path, method="GET", body=None):
             return await r.json() if r.status == 200 else None
     except: return None
 
-# ---------- ГЕНЕРАТОР ПОВІДОМЛЕННЯ ----------
+# ---------- ГЕНЕРАТОР ПОВІДОМЛЕННЯ (EMBED) ----------
 async def send_flight_message(channel, status, f, details_type="ongoing"):
-    """
-    status: 'Departed', 'Arrived', 'Completed'
-    """
     # 1. Дані
     cs = f.get("flightNumber") or f.get("callsign") or "N/A"
     airline = f.get("airline", {}).get("icao", "")
@@ -89,32 +86,43 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         pax = f.get("payload", {}).get("pax", 0)
         cargo = f.get("payload", {}).get("cargo", 0)
 
-    # 2. Формування тексту
+    embed = None
+
+    # --- 1. ВЗЛІТ ---
     if status == "Departed":
         delay = f.get("delay", 0)
-        msg = (f"🛫 **{full_cs} departed**\n"
-               f"{get_flag(dep)}{dep} ➡️ {get_flag(arr)}{arr}\n"
-               f"✈️ {ac}\n"
-               f"{get_timing(delay)}\n"
-               f"👨‍✈️ {pilot}\n"
-               f"👫 {pax} / 📦 {cargo} kg")
+        
+        # Рядки за твоїм списком
+        desc = (
+            f"{get_flag(dep)} **{dep}** ➡️ {get_flag(arr)} **{arr}**\n"
+            f"✈️ {ac}\n"
+            f"{get_timing(delay)}\n"
+            f"👨‍✈️ {pilot}\n"
+            f"👫 {pax} / 📦 {cargo} kg"
+        )
+        
+        embed = discord.Embed(title=f"🛫 {full_cs} departed", description=desc, color=0x3498db) # Синій
 
+    # --- 2. ПОСАДКА ---
     elif status == "Arrived":
-        # FPM логіка
         fpm = f.get("lastState", {}).get("speed", {}).get("touchDownRate", 0)
-        # Якщо нуль, пробуємо VS або ставимо N/A (для тесту підставимо число якщо 0)
-        if fpm == 0 and details_type == "test": fpm = -152 
+        if fpm == 0 and details_type == "test": fpm = -152 # Для тесту
         
         delay = f.get("delay", 0)
         
-        msg = (f"🛬 **{full_cs} arrived**\n"
-               f"{get_flag(dep)}{dep} ➡️ {get_flag(arr)}{arr}\n"
-               f"✈️ {ac}\n"
-               f"{get_timing(delay)}\n"
-               f"📉 {int(fpm)} FPM\n"
-               f"👨‍✈️ {pilot}\n"
-               f"👫 {pax} / 📦 {cargo} kg")
+        # Рядки за твоїм списком
+        desc = (
+            f"{get_flag(dep)} **{dep}** ➡️ {get_flag(arr)} **{arr}**\n"
+            f"✈️ {ac}\n"
+            f"{get_timing(delay)}\n"
+            f"📉 {int(fpm)} fpm\n"
+            f"👨‍✈️ {pilot}\n"
+            f"👫 {pax} / 📦 {cargo} kg"
+        )
 
+        embed = discord.Embed(title=f"🛬 {full_cs} arrived", description=desc, color=0x3498db) # Синій
+
+    # --- 3. ЗВІТ (CLOSED) ---
     elif status == "Completed":
         net_data = f.get("network")
         net = (net_data.get("name") if isinstance(net_data, dict) else str(net_data)) or "OFFLINE"
@@ -125,61 +133,47 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         income = t.get("revenue", 0)
         rating = f.get("rating", 0)
 
-        msg = (f"😎 **{full_cs} completed**\n"
-               f"{get_flag(dep)}{dep} ➡️ {get_flag(arr)}{arr}\n"
-               f"✈️ {ac}\n"
-               f"👨‍✈️ {pilot}\n"
-               f"🌐 {net.upper()}\n"
-               f"👫 {pax} / 📦 {cargo} kg\n"
-               f"📏 {dist} nm / ⏱️ {format_time(ftime)}\n"
-               f"💰 {income} $\n"
-               f"⭐ {rating}")
+        # Рядки за твоїм списком
+        desc = (
+            f"{get_flag(dep)} **{dep}** ➡️ {get_flag(arr)} **{arr}**\n"
+            f"✈️ {ac}\n"
+            f"👨‍✈️ {pilot}\n"
+            f"🌐 {net.upper()}\n"
+            f"👫 {pax} / 📦 {cargo} kg\n"
+            f"📏 {dist} nm / ⏱️ {format_time(ftime)}\n"
+            f"💰 {income} $\n"
+            f"⭐ {rating}"
+        )
 
-    await channel.send(msg)
+        embed = discord.Embed(title=f"😎 {full_cs} completed", description=desc, color=0x2ecc71) # Зелений (або темний 0x2f3136)
 
-# ---------- КОМАНДА ДЛЯ ТЕСТУВАННЯ ----------
+    if embed:
+        await channel.send(embed=embed)
+
+# ---------- КОМАНДА !test ----------
 @client.event
 async def on_message(message):
     if message.author == client.user: return
-
     if message.content == "!test":
-        await message.channel.send("🛠️ **Запуск симуляції польоту...**")
-        
-        # Фейкові дані
-        mock_flight = {
-            "flightNumber": "TEST777",
-            "airline": {"icao": "OSA"},
-            "dep": {"icao": "UKKK"},
-            "arr": {"icao": "UKBB"},
+        await message.channel.send("🛠️ **Test Embeds:**")
+        mock = {
+            "flightNumber": "TEST1", "airline": {"icao": "OSA"},
+            "dep": {"icao": "UKKK"}, "arr": {"icao": "UKBB"},
             "aircraft": {"airframe": {"name": "Boeing 737-800"}},
             "pilot": {"fullname": "Test Pilot"},
-            "payload": {"pax": 150, "cargo": 2500},
-            "delay": -2,
-            "network": {"name": "VATSIM"},
+            "payload": {"pax": 100, "cargo": 1500},
+            "delay": -3, "network": {"name": "VATSIM"},
             "lastState": {"speed": {"touchDownRate": -145}},
-            "result": {
-                "totals": {
-                    "distance": 350,
-                    "time": 55,
-                    "revenue": 4500,
-                    "payload": {"pax": 150, "cargo": 2500}
-                }
-            },
-            "rating": 9.8
+            "result": {"totals": {"distance": 30, "time": 15, "revenue": 2000, "payload": {"pax": 100, "cargo": 1500}}},
+            "rating": 9.9
         }
-
+        await send_flight_message(message.channel, "Departed", mock, "test")
         await asyncio.sleep(1)
-        await send_flight_message(message.channel, "Departed", mock_flight, "test")
-        
-        await asyncio.sleep(2)
-        await send_flight_message(message.channel, "Arrived", mock_flight, "test")
-        
-        await asyncio.sleep(2)
-        await send_flight_message(message.channel, "Completed", mock_flight, "test")
-        
-        await message.channel.send("✅ **Тест завершено!**")
+        await send_flight_message(message.channel, "Arrived", mock, "test")
+        await asyncio.sleep(1)
+        await send_flight_message(message.channel, "Completed", mock, "test")
 
-# ---------- ГОЛОВНИЙ ЦИКЛ ----------
+# ---------- ЦИКЛ ----------
 async def main_loop():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
@@ -188,29 +182,29 @@ async def main_loop():
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # 1. АКТИВНІ
+                # 1. Active
                 ongoing = await fetch_api(session, "/flights/ongoing")
                 if ongoing and "results" in ongoing:
                     for raw_f in ongoing["results"]:
                         fid = str(raw_f.get("_id") or raw_f.get("id"))
-                        # Для активних треба деталі
                         det = await fetch_api(session, f"/flight/{fid}")
                         if not det or "flight" not in det: continue
                         f = det["flight"]
-
-                        state.setdefault(fid, {})
                         
-                        # ВЗЛІТ
+                        cs = f.get("flightNumber") or f.get("callsign") or "N/A"
+                        if cs == "N/A": continue
+                        
+                        state.setdefault(fid, {})
+
                         if f.get("takeoffTimeAct") and not state[fid].get("takeoff"):
                             await send_flight_message(channel, "Departed", f, "ongoing")
                             state[fid]["takeoff"] = True
 
-                        # ПОСАДКА
                         if f.get("arrTimeAct") and not state[fid].get("landing"):
                             await send_flight_message(channel, "Arrived", f, "ongoing")
                             state[fid]["landing"] = True
 
-                # 2. ЗАКРИТІ
+                # 2. Closed
                 recent = await fetch_api(session, "/flights/recent", method="POST", body={"count": 5})
                 if recent and "results" in recent:
                     for raw_f in recent["results"]:
@@ -221,6 +215,10 @@ async def main_loop():
                         det = await fetch_api(session, f"/flight/{fid}")
                         if not det or "flight" not in det: continue
                         f = det["flight"]
+                        
+                        # Перевірка на валідність
+                        cs = f.get("flightNumber") or f.get("callsign") or "N/A"
+                        if cs == "N/A": continue
 
                         await send_flight_message(channel, "Completed", f, "result")
                         state.setdefault(fid, {})["completed"] = True
@@ -231,7 +229,7 @@ async def main_loop():
 
 @client.event
 async def on_ready():
-    print(f"✅ Бот {client.user} запущений")
+    print(f"✅ Logged in as {client.user}")
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
