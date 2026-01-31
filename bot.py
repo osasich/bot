@@ -6,8 +6,9 @@ import os
 import logging
 from pathlib import Path
 
-# ---------- НАЛАШТУВАННЯ (Береться з Railway Variables) ----------
+# ---------- НАЛАШТУВАННЯ (Змінні Railway) ----------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+# Перетворюємо ID каналу в int, якщо змінна є
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
 NEWSKY_API_KEY = os.getenv("NEWSKY_API_KEY")
 
@@ -28,6 +29,7 @@ def load_state():
     except: return {}
 
 def save_state(state):
+    # Тримаємо файл невеликим
     if len(state) > 100: state = dict(list(state.items())[-50:])
     STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
 
@@ -37,10 +39,10 @@ def get_flag(icao):
     return f":flag_{m.get(icao[:2], 'white')}:"
 
 def get_timing(delay):
-    if delay is None: return "⏱️ Unknown"
-    if delay > 5: return f"🔴 Delayed (+{delay} min)"
-    if delay < -5: return f"🟡 Earlier ({-delay} min)"
-    return "🟢 On time"
+    if delay is None: return "⏱️ Невідомо"
+    if delay > 5: return f"🔴 Затримка (+{delay} хв)"
+    if delay < -5: return f"🟡 Раніше на {-delay} хв"
+    return "🟢 Вчасно"
 
 # ---------- API КЛІЄНТ ----------
 async def fetch_api(session, path, method="GET", body=None):
@@ -57,84 +59,131 @@ async def on_ready():
 async def main_loop():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
+    
+    # Якщо канал не знайдено в кеші, спробуємо знайти через API
+    if not channel:
+        try:
+            channel = await client.fetch_channel(CHANNEL_ID)
+        except Exception as e:
+            logging.error(f"Не можу знайти канал {CHANNEL_ID}: {e}")
+            return
+
     state = load_state()
 
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # 1. Перевірка активних рейсів (Takeoff / Landing)
+                # === 1. ONGOING (ВЗЛІТ / ПОСАДКА) ===
                 ongoing = await fetch_api(session, "/flights/ongoing")
                 if ongoing and "results" in ongoing:
                     for f in ongoing["results"]:
-                        fid = str(f["id"])
+                        # БЕЗПЕЧНЕ ОТРИМАННЯ ID (щоб не було помилок)
+                        fid = str(f.get("_id") or f.get("id"))
+                        if not fid or fid == "None": continue
+                        
                         state.setdefault(fid, {})
                         
-                        # Дані для повідомлення
-                        cs = f["callsign"]
-                        dep, arr = f["departure"]["icao"], f["arrival"]["icao"]
+                        # Дані з Ongoing
+                        cs = f.get("callsign", "N/A")
+                        dep = f.get("departure", {}).get("icao", "????")
+                        arr = f.get("arrival", {}).get("icao", "????")
+                        # Тип літака
                         ac = f.get("aircraft", {}).get("airframe", {}).get("ident", "A/C")
-                        pax = f.get("pax", 0)
-                        cargo = f.get("cargo", 0)
-
-                        # ТАКЕOFF
+                        delay = f.get("delay")
+                        
+                        # -- ВЗЛІТ (DEPARTED) --
                         if f.get("takeoffTimeAct") and not state[fid].get("takeoff"):
+                            # Тягнемо деталі для імені пілота
                             det = await fetch_api(session, f"/flight/{fid}")
-                            pilot = det["flight"]["pilot"]["fullname"] if det else "Pilot"
+                            pilot = "Pilot"
+                            pax = f.get("pax", 0)
+                            cargo = f.get("cargo", 0)
+                            
+                            if det and "flight" in det:
+                                pilot = det["flight"].get("pilot", {}).get("fullname", "Pilot")
+
                             msg = (
                                 f"🛫 **{cs} departed**\n"
                                 f"{get_flag(dep)}{dep} ➡️ {get_flag(arr)}{arr}\n"
                                 f"✈️ {ac}\n"
-                                f"🕒 {get_timing(f.get('delay'))}\n"
+                                f"🕒 {get_timing(delay)}\n"
                                 f"👨‍✈️ {pilot}\n"
-                                f"📦 {pax} pax / {cargo} kg cargo"
+                                f"📦 {pax} Pax / {cargo} kg Cargo"
                             )
                             await channel.send(msg)
                             state[fid]["takeoff"] = True
 
-                        # LANDING
+                        # -- ПОСАДКА (ARRIVED) --
                         if f.get("arrTimeAct") and not state[fid].get("landing"):
                             det = await fetch_api(session, f"/flight/{fid}")
-                            pilot = det["flight"]["pilot"]["fullname"] if det else "Pilot"
-                            fpm = det["flight"].get("lastState", {}).get("speed", {}).get("touchDownRate", 0) if det else "N/A"
+                            pilot = "Pilot"
+                            fpm = "N/A"
+                            pax = f.get("pax", 0)
+                            cargo = f.get("cargo", 0)
+
+                            if det and "flight" in det:
+                                pilot = det["flight"].get("pilot", {}).get("fullname", "Pilot")
+                                fpm = det["flight"].get("lastState", {}).get("speed", {}).get("touchDownRate", "N/A")
+
                             msg = (
                                 f"🛬 **{cs} arrived**\n"
                                 f"{get_flag(dep)}{dep} ➡️ {get_flag(arr)}{arr}\n"
                                 f"✈️ {ac}\n"
-                                f"🕒 {get_timing(f.get('delay'))}\n"
+                                f"🕒 {get_timing(delay)}\n"
                                 f"📉 {fpm} FPM\n"
                                 f"👨‍✈️ {pilot}\n"
-                                f"📦 {pax} pax / {cargo} kg cargo"
+                                f"📦 {pax} Pax / {cargo} kg Cargo"
                             )
                             await channel.send(msg)
                             state[fid]["landing"] = True
 
-                # 2. Перевірка закритих рейсів (Completed)
+                # === 2. COMPLETED (CLOSED) ===
                 recent = await fetch_api(session, "/flights/recent", method="POST", body={"count": 5})
                 if recent and "results" in recent:
                     for f in recent["results"]:
-                        fid = str(f["id"])
+                        fid = str(f.get("_id") or f.get("id"))
+                        if not fid or fid == "None": continue
+                        
+                        # Якщо рейс закритий і ми ще не писали про це
                         if f.get("close") and not state.get(fid, {}).get("completed"):
                             state.setdefault(fid, {})
                             det = await fetch_api(session, f"/flight/{fid}")
-                            if det:
+                            
+                            if det and "flight" in det:
                                 fl = det["flight"]
+                                
+                                # Збір даних для фінального звіту
+                                cs = fl.get("callsign", "N/A")
+                                dep = fl.get("departure", {}).get("icao", "????")
+                                arr = fl.get("arrival", {}).get("icao", "????")
+                                ac = fl.get("aircraft", {}).get("airframe", {}).get("ident", "A/C")
+                                pilot = fl.get("pilot", {}).get("fullname", "Pilot")
+                                net = fl.get("network", "OFFLINE").upper()
+                                pax = fl.get("pax", 0)
+                                cargo = fl.get("cargo", 0)
+                                dist = fl.get("distance", 0)
+                                flight_time = fl.get("flightTime", 0)
+                                income = fl.get("finances", {}).get("totalIncome", 0)
+                                score = fl.get("rating", "0.00")
+
                                 msg = (
-                                    f"😎 **{fl['callsign']} completed**\n"
-                                    f"{get_flag(fl['departure']['icao'])}{fl['departure']['icao']} ➡️ {get_flag(fl['arrival']['icao'])}{fl['arrival']['icao']}\n"
-                                    f"✈️ {fl['aircraft']['airframe']['ident']}\n"
-                                    f"👨‍✈️ {fl['pilot']['fullname']}\n"
-                                    f"🌐 {fl.get('network', 'OFFLINE').upper()}\n"
-                                    f"📦 {fl.get('pax', 0)} pax / {fl.get('cargo', 0)} kg cargo\n"
-                                    f"📏 {fl.get('distance', 0)} nm / ⏱️ {fl.get('flightTime', 0)} min\n"
-                                    f"💰 {fl.get('finances', {}).get('totalIncome', 0)}$\n"
-                                    f"⭐ {fl.get('rating', '0.00')}"
+                                    f"😎 **{cs} completed**\n"
+                                    f"{get_flag(dep)}{dep} ➡️ {get_flag(arr)}{arr}\n"
+                                    f"✈️ {ac}\n"
+                                    f"👨‍✈️ {pilot}\n"
+                                    f"🌐 {net}\n"
+                                    f"📦 {pax} Pax / {cargo} kg Cargo\n"
+                                    f"📏 {dist} nm / ⏱️ {flight_time} min\n"
+                                    f"💰 {income}$\n"
+                                    f"⭐ {score}"
                                 )
                                 await channel.send(msg)
                                 state[fid]["completed"] = True
 
                 save_state(state)
+
             except Exception as e:
-                logging.error(f"Помилка циклу: {e}")
+                logging.error(f"ПОМИЛКА В ЦИКЛІ: {e}")
             
             await asyncio.sleep(CHECK_INTERVAL)
 
