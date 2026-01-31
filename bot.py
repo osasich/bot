@@ -5,6 +5,7 @@ import json
 import os
 import logging
 import re
+import random  # <--- Додано для випадкових чисел
 from pathlib import Path
 
 # ---------- SETTINGS ----------
@@ -51,7 +52,8 @@ def get_flag(icao):
         'EP': 'PL', 'LK': 'CZ', 'LH': 'HU', 'LO': 'AT', 'LS': 'CH', 'EB': 'BE',
         'EH': 'NL', 'EK': 'DK', 'EN': 'NO', 'ES': 'SE', 'EF': 'FI', 'LT': 'TR',
         'LG': 'GR', 'U': 'RU', 'UM': 'BY', 'UB': 'AZ', 'UG': 'GE', 'UD': 'AM',
-        'UA': 'KZ', 'O': 'SA', 'V': 'IN', 'W': 'ID', 'F': 'ZA', 'S': 'BR'
+        'UA': 'KZ', 'O': 'SA', 'V': 'IN', 'W': 'ID', 'F': 'ZA', 'S': 'BR',
+        'RJ': 'JP', 'RO': 'JP', 'OM': 'AE', 'ZB': 'CN'
     }
     iso = prefixes.get(icao[:2]) or prefixes.get(icao[:1])
     if not iso: return "🏳️"
@@ -60,10 +62,10 @@ def get_flag(icao):
 def get_timing(delay):
     try:
         d = float(delay)
-        if d > 5: return f"🔴 Delay **{int(d)} min**"
-        if d < -5: return f"🟡 Early **{abs(int(d))} min**"
+        if d > 5: return f"🔴 **Delay** (+{int(d)} min)"
+        if d < -5: return f"🟡 **Early** ({int(d)} min)"
         return "🟢 **On time**"
-    except: return "⏱️ N/A"
+    except: return "⏱️ **N/A**"
 
 def format_time(minutes):
     if not minutes: return "00:00"
@@ -84,9 +86,9 @@ async def fetch_api(session, path, method="GET", body=None):
             return await r.json() if r.status == 200 else None
     except: return None
 
-# ---------- MESSAGE GENERATOR (ENGLISH) ----------
+# ---------- MESSAGE GENERATOR ----------
 async def send_flight_message(channel, status, f, details_type="ongoing"):
-    # Data extraction
+    # 1. Basic Data
     cs = f.get("flightNumber") or f.get("callsign") or "N/A"
     airline = f.get("airline", {}).get("icao", "")
     full_cs = f"{airline} {cs}" if airline else cs
@@ -100,6 +102,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     ac = f.get("aircraft", {}).get("airframe", {}).get("name", "A/C")
     pilot = f.get("pilot", {}).get("fullname", "Pilot")
     
+    # Payload
     if details_type == "result":
         pax = f.get("result", {}).get("totals", {}).get("payload", {}).get("pax", 0)
         cargo = f.get("result", {}).get("totals", {}).get("payload", {}).get("cargo", 0)
@@ -125,16 +128,12 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 
     # === 2. ARRIVED ===
     elif status == "Arrived":
-        fpm = f.get("lastState", {}).get("speed", {}).get("touchDownRate", 0)
-        if fpm == 0 and details_type == "test": fpm = -152
-        
         delay = f.get("delay", 0)
         
         desc = (
             f"{get_flag(dep_icao)} **{dep_icao}** ({dep_name}) ➡️ {get_flag(arr_icao)} **{arr_icao}** ({arr_name})\n\n"
             f"✈️ **{ac}**\n\n"
             f"{get_timing(delay)}\n\n"
-            f"📉 **{int(fpm)} fpm**\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
             f"👫 **{pax}** Pax  |  📦 **{cargo}** kg"
         )
@@ -151,12 +150,17 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         ftime = t.get("time", 0)
         income = t.get("revenue", 0)
         rating = f.get("rating", 0.0)
+        
+        # FPM extraction
+        final_fpm = f.get("lastState", {}).get("speed", {}).get("touchDownRate", 0)
+        if final_fpm == 0 and details_type == "test": final_fpm = -random.randint(60, 400) # Mock FPM
 
         desc = (
             f"{get_flag(dep_icao)} **{dep_icao}** ({dep_name}) ➡️ {get_flag(arr_icao)} **{arr_icao}** ({arr_name})\n\n"
             f"✈️ **{ac}**\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
             f"🌐 **{net.upper()}**\n\n"
+            f"📉 **{int(final_fpm)} fpm**\n\n" 
             f"👫 **{pax}** Pax  |  📦 **{cargo}** kg\n\n"
             f"📏 **{dist}** nm  |  ⏱️ **{format_time(ftime)}**\n\n"
             f"💰 **{income} $**\n\n"
@@ -168,28 +172,67 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     if embed:
         await channel.send(embed=embed)
 
-# ---------- TEST COMMAND ----------
+# ---------- TEST COMMAND (RANDOM GENERATOR) ----------
 @client.event
 async def on_message(message):
     if message.author == client.user: return
+    
     if message.content == "!test":
-        await message.channel.send("🛠️ **Generating test reports...**")
+        await message.channel.send("🎲 **Generating Random Flight Report...**")
+        
+        # Database for randomization
+        airports = [
+            {"icao": "UKKK", "name": "Kyiv Zhuliany"}, {"icao": "UKBB", "name": "Boryspil"},
+            {"icao": "KJFK", "name": "JFK New York"}, {"icao": "EGLL", "name": "London Heathrow"},
+            {"icao": "EDDF", "name": "Frankfurt"}, {"icao": "OMDB", "name": "Dubai Intl"},
+            {"icao": "RJTT", "name": "Tokyo Haneda"}, {"icao": "EPWA", "name": "Warsaw Chopin"},
+            {"icao": "LFPG", "name": "Paris CDG"}, {"icao": "LTFM", "name": "Istanbul"}
+        ]
+        planes = ["Boeing 737-800", "Airbus A320", "Cessna 172", "Boeing 777-300ER", "CRJ-900"]
+        pilots = ["Captain Jack", "Nazar Pilot", "Sky Walker", "Maverick", "Goose"]
+        networks = ["VATSIM", "IVAO", "OFFLINE", "POSCON"]
+        
+        # Random Selections
+        dep = random.choice(airports)
+        arr = random.choice(airports)
+        while arr == dep: arr = random.choice(airports) # Ensure route
+        
+        pax_rnd = random.randint(50, 200)
+        cargo_rnd = random.randint(500, 5000)
+        dist_rnd = random.randint(200, 4000)
+        time_rnd = int(dist_rnd / 7 + random.randint(10, 30))
+        delay_rnd = random.randint(-20, 45) # -20 early, +45 late
+        fpm_rnd = -random.randint(50, 600) # Landing rate
+        score_rnd = round(random.uniform(5.0, 10.0), 2)
+        income_rnd = random.randint(-500, 5000)
+        
         mock = {
-            "flightNumber": "TEST1", "airline": {"icao": "OSA"},
-            "dep": {"icao": "UKKK", "name": "Ihor Sikorsky Kyiv International Airport"},
-            "arr": {"icao": "UKBB", "name": "Boryspil International Airport"},
-            "aircraft": {"airframe": {"name": "Boeing 737-800"}},
-            "pilot": {"fullname": "Test Pilot"},
-            "payload": {"pax": 100, "cargo": 1500},
-            "delay": -3, "network": {"name": "VATSIM"},
-            "lastState": {"speed": {"touchDownRate": -145}},
-            "result": {"totals": {"distance": 350, "time": 55, "revenue": 2500, "payload": {"pax": 100, "cargo": 1500}}},
-            "rating": 9.9
+            "flightNumber": f"{random.randint(10, 999)}T", 
+            "airline": {"icao": "OSA"},
+            "dep": dep, 
+            "arr": arr,
+            "aircraft": {"airframe": {"name": random.choice(planes)}},
+            "pilot": {"fullname": random.choice(pilots)},
+            "payload": {"pax": pax_rnd, "cargo": cargo_rnd},
+            "delay": delay_rnd,
+            "network": {"name": random.choice(networks)},
+            "lastState": {"speed": {"touchDownRate": fpm_rnd}},
+            "result": {
+                "totals": {
+                    "distance": dist_rnd, 
+                    "time": time_rnd, 
+                    "revenue": income_rnd, 
+                    "payload": {"pax": pax_rnd, "cargo": cargo_rnd}
+                }
+            },
+            "rating": score_rnd
         }
+        
+        # Simulation sequence
         await send_flight_message(message.channel, "Departed", mock, "test")
-        await asyncio.sleep(1)
+        await asyncio.sleep(2)
         await send_flight_message(message.channel, "Arrived", mock, "test")
-        await asyncio.sleep(1)
+        await asyncio.sleep(2)
         await send_flight_message(message.channel, "Completed", mock, "test")
 
 # ---------- MAIN LOOP ----------
