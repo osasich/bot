@@ -237,13 +237,18 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         
         title_text = f"😎 {full_cs} completed"
         color_code = 0x2ecc71
+
+        # 👇 ЛОГІКА EMEG/CRASH 👇
+        rating_str = f"{get_rating_square(rating)} **{rating}**"
         
         if raw_balance <= -900000: 
             title_text = f"💥 {full_cs} CRASHED"
             color_code = 0x992d22 
+            rating_str = "💀 **CRASH**" # Замінюємо рейтинг
         elif f.get("emergency") is True or (raw_balance == 0 and dist > 1):
             title_text = f"⚠️ {full_cs} EMERGENCY"
             color_code = 0xe67e22 
+            rating_str = "🟥 **EMEG**" # Замінюємо рейтинг
             
         landing_info = get_landing_data(f, details_type)
 
@@ -257,7 +262,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             f"👫 **{raw_pax}** Pax  |  📦 **{cargo_kg}** kg\n\n"
             f"📏 **{dist}** nm  |  ⏱️ **{format_time(ftime)}**\n\n"
             f"💰 **{formatted_balance} $**\n\n"
-            f"{get_rating_square(rating)} **{rating}**"
+            f"{rating_str}"
         )
         embed = discord.Embed(title=title_text, url=flight_url, description=desc, color=color_code)
 
@@ -405,6 +410,3 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
-
-
-
