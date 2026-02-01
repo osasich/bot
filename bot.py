@@ -90,7 +90,7 @@ def get_landing_data(f, details_type):
     g_force = 0.0
     found = False
 
-    # 1. Violations/Events (Most accurate)
+    # 1. Violations/Events
     if "result" in f and "violations" in f["result"]:
         for v in f["result"]["violations"]:
             payload = v.get("entry", {}).get("payload", {})
@@ -134,6 +134,15 @@ async def fetch_api(session, path, method="GET", body=None):
 
 # ---------- MESSAGE GENERATOR ----------
 async def send_flight_message(channel, status, f, details_type="ongoing"):
+    # Отримуємо ID рейсу для посилання
+    fid = f.get("_id") or f.get("id") or "test_id"
+    
+    # Генеруємо посилання залежно від статусу
+    if status == "Completed":
+        flight_url = f"https://newsky.app/flight/{fid}"
+    else:
+        flight_url = f"https://newsky.app/map/{fid}"
+
     cs = f.get("flightNumber") or f.get("callsign") or "N/A"
     airline = f.get("airline", {}).get("icao", "")
     full_cs = f"{airline} {cs}" if airline else cs
@@ -155,7 +164,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 
     embed = None
 
-    # === 1. DEPARTED ===
+    # === 1. DEPARTED (Link to MAP) ===
     if status == "Departed":
         delay = f.get("delay", 0)
         desc = (
@@ -165,9 +174,10 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             f"👨‍✈️ **{pilot}**\n\n"
             f"👫 **{pax}** Pax  |  📦 **{cargo}** kg"
         )
-        embed = discord.Embed(title=f"🛫 {full_cs} departed", description=desc, color=0x3498db)
+        # Додаємо url=flight_url
+        embed = discord.Embed(title=f"🛫 {full_cs} departed", url=flight_url, description=desc, color=0x3498db)
 
-    # === 2. ARRIVED ===
+    # === 2. ARRIVED (Link to MAP) ===
     elif status == "Arrived":
         delay = f.get("delay", 0)
         desc = (
@@ -177,9 +187,10 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             f"👨‍✈️ **{pilot}**\n\n"
             f"👫 **{pax}** Pax  |  📦 **{cargo}** kg"
         )
-        embed = discord.Embed(title=f"🛬 {full_cs} arrived", description=desc, color=0x3498db)
+        # Додаємо url=flight_url
+        embed = discord.Embed(title=f"🛬 {full_cs} arrived", url=flight_url, description=desc, color=0x3498db)
 
-    # === 3. COMPLETED ===
+    # === 3. COMPLETED (Link to FLIGHT REPORT) ===
     elif status == "Completed":
         net_data = f.get("network")
         net = (net_data.get("name") if isinstance(net_data, dict) else str(net_data)) or "OFFLINE"
@@ -187,10 +198,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         t = f.get("result", {}).get("totals", {})
         dist = t.get("distance", 0)
         ftime = t.get("time", 0)
-        
-        # --- FIX: INCOME vs BALANCE ---
-        # Використовуємо 'balance' (чистий прибуток), а не 'revenue' (дохід)
-        income = int(t.get("balance", 0)) 
+        income = int(t.get("balance", 0)) # Correct balance
         
         rating = f.get("rating", 0.0)
         landing_info = get_landing_data(f, details_type)
@@ -206,7 +214,8 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             f"💰 **{income} $**\n\n"
             f"{get_rating_square(rating)} **{rating}**"
         )
-        embed = discord.Embed(title=f"😎 {full_cs} completed", description=desc, color=0x2ecc71)
+        # Додаємо url=flight_url (тут вже веде на звіт /flight/)
+        embed = discord.Embed(title=f"😎 {full_cs} completed", url=flight_url, description=desc, color=0x2ecc71)
 
     if embed:
         await channel.send(embed=embed)
@@ -216,8 +225,9 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 async def on_message(message):
     if message.author == client.user: return
     if message.content == "!test":
-        await message.channel.send("🛠️ **Generating test reports...**")
+        await message.channel.send("🛠️ **Generating test reports with links...**")
         mock = {
+            "_id": "697f11b19da57b990acafff9", # Fake ID for link testing
             "flightNumber": "TEST1", "airline": {"icao": "OSA"},
             "dep": {"icao": "UKKK", "name": "Ihor Sikorsky Kyiv International Airport"},
             "arr": {"icao": "UKBB", "name": "Boryspil International Airport"},
@@ -229,7 +239,7 @@ async def on_message(message):
             "result": {
                 "totals": {
                     "distance": 350, "time": 55, 
-                    "balance": -2573, # Test negative balance
+                    "balance": -2573,
                     "payload": {"pax": 100, "cargo": 1500}
                 }
             },
