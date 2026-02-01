@@ -9,7 +9,7 @@ import random
 import io
 from pathlib import Path
 
-# ---------- SETTINGS ----------
+# ---------- НАЛАШТУВАННЯ ----------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
 NEWSKY_API_KEY = os.getenv("NEWSKY_API_KEY")
@@ -28,7 +28,7 @@ client = discord.Client(intents=intents)
 # Глобальна змінна для бази
 AIRPORTS_DB = {}
 
-# ---------- HELPERS ----------
+# ---------- ДОПОМІЖНІ ФУНКЦІЇ ----------
 def load_state():
     if not STATE_FILE.exists(): return {}
     try: return json.loads(STATE_FILE.read_text(encoding="utf-8"))
@@ -165,7 +165,9 @@ def get_landing_data(f, details_type):
             found = True
 
     if found and fpm != 0:
-        return f"📉 **-{abs(fpm)} fpm**, **{g_force} G**"
+        fpm_val = -abs(fpm)
+        g_str = f", **{g_force} G**" if g_force > 0 else ""
+        return f"📉 **{fpm_val} fpm**{g_str}"
     
     return "📉 **N/A**"
 
@@ -242,16 +244,20 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         formatted_balance = f"{raw_balance:,}".replace(",", ".")
         rating = f.get("rating", 0.0)
         
-        # --- CRASH / EMERGENCY DETECTION ---
+        # --- CRASH / EMERGENCY DETECTION (UPDATED) ---
         title_text = f"😎 {full_cs} completed"
         color_code = 0x2ecc71
         
+        # 1. CRASH: Великий мінус на балансі (штраф 1 млн)
         if raw_balance <= -900000: 
             title_text = f"💥 {full_cs} CRASHED"
-            color_code = 0x992d22
-        elif raw_balance == 0 and dist > 1:
+            color_code = 0x992d22 # Dark Red
+        
+        # 2. EMERGENCY: Поле 'emergency' = true АБО баланс 0
+        # Ми бачили в дампі поле "emergency", використаємо його
+        elif f.get("emergency") is True or (raw_balance == 0 and dist > 1):
             title_text = f"⚠️ {full_cs} EMERGENCY"
-            color_code = 0xe67e22
+            color_code = 0xe67e22 # Orange
             
         landing_info = get_landing_data(f, details_type)
 
@@ -292,7 +298,7 @@ async def on_message(message):
                     await message.channel.send("❌ Не вдалося отримати дані. Перевір ID.")
                     return
                 
-                # Формуємо JSON файл
+                # Формуємо JSON файл для відправки
                 json_str = json.dumps(data, indent=4, ensure_ascii=False)
                 file_bin = io.BytesIO(json_str.encode('utf-8'))
                 
@@ -315,6 +321,21 @@ async def on_message(message):
             "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 100, "cargo": 40}}}
         }
         await send_flight_message(message.channel, "Completed", mock_norm, "test")
+        
+        # Emergency (Balance 0)
+        mock_emerg = mock_norm.copy()
+        mock_emerg["_id"] = "test_emerg"
+        mock_emerg["emergency"] = True # Test explicit flag
+        mock_emerg["result"] = {"totals": {"distance": 350, "time": 55, "balance": 0, "payload": {"pax": 100, "cargo": 40}}}
+        await send_flight_message(message.channel, "Completed", mock_emerg, "test")
+        
+        # Crash (Balance -1M)
+        mock_crash = mock_norm.copy()
+        mock_crash["_id"] = "test_crash"
+        mock_crash["landing"] = {"rate": -2500, "gForce": 4.5} 
+        mock_crash["rating"] = 0.0
+        mock_crash["result"] = {"totals": {"distance": 350, "time": 55, "balance": -1150000, "payload": {"pax": 100, "cargo": 40}}}
+        await send_flight_message(message.channel, "Completed", mock_crash, "test")
 
 async def main_loop():
     await client.wait_until_ready()
@@ -327,7 +348,6 @@ async def main_loop():
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # 1. Active Flights
                 ongoing = await fetch_api(session, "/flights/ongoing")
                 if ongoing and "results" in ongoing:
                     print(f"📡 Tracking {len(ongoing['results'])} flights...", end='\r')
@@ -347,7 +367,6 @@ async def main_loop():
                             await send_flight_message(channel, "Arrived", f, "ongoing")
                             state[fid]["landing"] = True
 
-                # 2. Completed Flights
                 recent = await fetch_api(session, "/flights/recent", method="POST", body={"count": 5})
                 if recent and "results" in recent:
                     for raw_f in recent["results"]:
