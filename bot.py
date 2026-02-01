@@ -7,6 +7,7 @@ import logging
 import re
 import random
 import io
+import time
 from pathlib import Path
 
 # ---------- НАЛАШТУВАННЯ ----------
@@ -88,12 +89,10 @@ def format_airport_string(icao, api_name):
         name = db_data.get("name", "") or ""
         country = db_data.get("country", "XX")
         
-        # --- KYIV FIX ---
         if city.lower() == "kiev": city = "Kyiv"
         name = name.replace("Kiev", "Kyiv")
         
         clean_name = clean_text(name)
-        display_text = ""
         
         if city and clean_name:
             if city.lower() in clean_name.lower():
@@ -148,14 +147,14 @@ def get_landing_data(f, details_type):
 
     fpm, g_force, found = 0, 0.0, False
     
-    # 1. Шукаємо в об'єкті landing (найчастіше тут)
+    # 1. Landing Object
     if "landing" in f and f["landing"]:
         td = f["landing"]
         if "rate" in td: fpm = int(td["rate"])
         if "gForce" in td: g_force = float(td["gForce"])
         if fpm != 0 or g_force != 0: found = True
 
-    # 2. Шукаємо в violations (якщо був штраф за посадку)
+    # 2. Violations
     if not found and "result" in f and "violations" in f["result"]:
         for v in f["result"]["violations"]:
             td = v.get("entry", {}).get("payload", {}).get("touchDown", {})
@@ -163,7 +162,7 @@ def get_landing_data(f, details_type):
                 fpm, g_force, found = int(td.get("rate", 0)), float(td.get("gForce", 0)), True
                 if found: break
 
-    # 3. Шукаємо в lastState (якщо нічого іншого немає)
+    # 3. LastState
     if not found:
         val = f.get("lastState", {}).get("speed", {}).get("touchDownRate")
         if val: 
@@ -283,53 +282,80 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 async def on_message(message):
     if message.author == client.user: return
     
-    # 🕵️ ШПИГУН
+    # 🕵️ ШПИГУН (Dump)
     if message.content.startswith("!spy"):
         try:
             parts = message.content.split()
-            if len(parts) < 2:
-                await message.channel.send("⚠️ Введи ID рейсу!")
-                return
+            if len(parts) < 2: return await message.channel.send("⚠️ ID?")
             fid = parts[1]
-            await message.channel.send(f"🕵️ **Аналізую {fid}...**")
+            await message.channel.send(f"🕵️ Dumping {fid}...")
             async with aiohttp.ClientSession() as session:
                 data = await fetch_api(session, f"/flight/{fid}")
-                if not data:
-                    await message.channel.send("❌ Помилка API.")
-                    return
-                json_str = json.dumps(data, indent=4, ensure_ascii=False)
-                await message.channel.send(file=discord.File(io.BytesIO(json_str.encode('utf-8')), filename=f"flight_{fid}.json"))
+                if not data: return await message.channel.send("❌ Error")
+                await message.channel.send(file=discord.File(io.BytesIO(json.dumps(data, indent=4).encode()), filename=f"flight_{fid}.json"))
         except Exception as e: await message.channel.send(f"Error: {e}")
 
-    # TEST COMMAND (GENERATES 3 SCREENSHOTS)
+# 📡 LIVE MONITOR (SAFE MODE)
+    if message.content.startswith("!monitor"):
+        parts = message.content.split()
+        if len(parts) < 2:
+            return await message.channel.send("⚠️ Usage: `!monitor <FLIGHT_ID>`")
+        
+        fid = parts[1]
+        await message.channel.send(f"📡 **STARTING LIVE MONITOR FOR {fid}**\nPolling every 5 seconds... (Safe Mode)")
+        
+        async with aiohttp.ClientSession() as session:
+            arrived_detected = False
+            start_wait_time = 0
+            
+            # Обмеження часу роботи монітора (наприклад, 10 хвилин макс), щоб не завис навічно
+            max_duration = 600 
+            start_monitor_time = time.time()
+
+            while True:
+                # Перевірка на таймаут всього монітора
+                if time.time() - start_monitor_time > max_duration:
+                    await message.channel.send("⏱️ Monitor timed out (10 min limit). Stopping.")
+                    break
+
+                data = await fetch_api(session, f"/flight/{fid}")
+                if not data or "flight" not in data:
+                    await asyncio.sleep(5)
+                    continue
+                
+                f = data["flight"]
+                is_arrived = bool(f.get("arrTimeAct"))
+                
+                # Перевіряємо дані
+                landing_str = get_landing_data(f, "ongoing")
+                has_data = "N/A" not in landing_str
+                
+                # 1. Засікли зміну статусу
+                if not arrived_detected and is_arrived:
+                    arrived_detected = True
+                    start_wait_time = time.time()
+                    await message.channel.send(f"🛬 **DETECTED ARRIVED STATUS!**\nWaiting for Newsky database update...")
+                
+                # 2. Чекаємо появи цифр
+                if arrived_detected:
+                    if has_data:
+                        elapsed = round(time.time() - start_wait_time, 1)
+                        await message.channel.send(f"✅ **DATA APPEARED!**\n⏱️ Server Delay: **{elapsed} sec**\n📊 Result: `{landing_str}`")
+                        break
+                    else:
+                        # Якщо пройшло більше 120 сек після посадки і глухо
+                        if time.time() - start_wait_time > 120:
+                            await message.channel.send("❌ Timeout: Newsky hasn't processed landing data in 2 mins.")
+                            break
+
+                # 🔥 ЧЕКАЄМО 5 СЕКУНД (Це безпечний інтервал)
+                await asyncio.sleep(5)
+
+    # TEST COMMAND
     if message.content == "!test":
-        await message.channel.send("🛠️ **Generatings Test Screenshots...**")
-        
-        # 1. NORMAL
-        mock_norm = {
-            "_id": "test_norm", "flightNumber": "TEST1", "airline": {"icao": "OSA"},
-            "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"},
-            "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"},
-            "payload": {"pax": 100, "cargo": 40}, "network": "VATSIM", "rating": 9.9,
-            "landing": {"rate": -150, "gForce": 1.1},
-            "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 100, "cargo": 40}}}
-        }
-        await send_flight_message(message.channel, "Completed", mock_norm, "test")
-        
-        # 2. EMERGENCY
-        mock_emerg = mock_norm.copy()
-        mock_emerg["_id"] = "test_emerg"
-        mock_emerg["emergency"] = True
-        mock_emerg["result"] = {"totals": {"distance": 350, "time": 55, "balance": 0, "payload": {"pax": 100, "cargo": 40}}}
-        await send_flight_message(message.channel, "Completed", mock_emerg, "test")
-        
-        # 3. CRASH
-        mock_crash = mock_norm.copy()
-        mock_crash["_id"] = "test_crash"
-        mock_crash["landing"] = {"rate": -2500, "gForce": 4.5} 
-        mock_crash["rating"] = 0.0
-        mock_crash["result"] = {"totals": {"distance": 350, "time": 55, "balance": -1150000, "payload": {"pax": 100, "cargo": 40}}}
-        await send_flight_message(message.channel, "Completed", mock_crash, "test")
+        await message.channel.send("🛠️ **Test (Screenshots Mode)...**")
+        mock = {"_id": "test", "flightNumber": "TEST1", "airline": {"icao": "OSA"}, "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"}, "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Test Pilot"}, "payload": {"pax": 100, "cargo": 40}, "network": "VATSIM", "rating": 9.9, "landing": {"rate": -150, "gForce": 1.1}, "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 100, "cargo": 40}}}}
+        await send_flight_message(message.channel, "Completed", mock, "test")
 
 async def main_loop():
     await client.wait_until_ready()
@@ -342,7 +368,6 @@ async def main_loop():
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # 1. Active Flights
                 ongoing = await fetch_api(session, "/flights/ongoing")
                 if ongoing and "results" in ongoing:
                     print(f"📡 Tracking {len(ongoing['results'])} flights...", end='\r')
@@ -355,14 +380,24 @@ async def main_loop():
                         if cs == "N/A": continue
                         
                         state.setdefault(fid, {})
+
+                        # DEPARTED
                         if f.get("takeoffTimeAct") and not state[fid].get("takeoff"):
                             await send_flight_message(channel, "Departed", f, "ongoing")
                             state[fid]["takeoff"] = True
+
+                        # ARRIVED (WITH WAIT)
                         if f.get("arrTimeAct") and not state[fid].get("landing"):
+                            # Чекаємо 5 секунд для синхронізації FPM
+                            await asyncio.sleep(5)
+                            # Перечитуємо дані
+                            det_fresh = await fetch_api(session, f"/flight/{fid}")
+                            if det_fresh and "flight" in det_fresh:
+                                f = det_fresh["flight"]
+                            
                             await send_flight_message(channel, "Arrived", f, "ongoing")
                             state[fid]["landing"] = True
 
-                # 2. Completed Flights
                 recent = await fetch_api(session, "/flights/recent", method="POST", body={"count": 5})
                 if recent and "results" in recent:
                     for raw_f in recent["results"]:
