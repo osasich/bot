@@ -79,11 +79,8 @@ def get_rating_square(rating):
         return "🟥"
     except: return "⬜"
 
-# --- 🔥 ОТРИМАННЯ FPM ТА G-FORCE 🔥 ---
+# --- FPM + G-Force Search ---
 def get_landing_data(f, details_type):
-    """Повертає рядок формату: 📉 -123 fpm, 1.3 G"""
-    
-    # Фейк для тесту
     if details_type == "test":
         fpm = -random.randint(50, 400)
         g = round(random.uniform(0.9, 1.8), 2)
@@ -93,13 +90,11 @@ def get_landing_data(f, details_type):
     g_force = 0.0
     found = False
 
-    # 1. Пошук у violations/events (Найточніше, бо Newsky сюди записує посадку як подію)
+    # 1. Violations/Events (Most accurate)
     if "result" in f and "violations" in f["result"]:
         for v in f["result"]["violations"]:
-            # Шукаємо об'єкт touchDown всередині payload
             payload = v.get("entry", {}).get("payload", {})
             td = payload.get("touchDown", {})
-            
             if td:
                 if "rate" in td: 
                     fpm = int(td["rate"])
@@ -107,11 +102,9 @@ def get_landing_data(f, details_type):
                 if "gForce" in td: 
                     g_force = float(td["gForce"])
                     found = True
-                
-                # Якщо знайшли хоч щось - виходимо
                 if found: break
 
-    # 2. Якщо не знайшли в violations, шукаємо в landing object (для ідеальних посадок)
+    # 2. Landing Object
     if not found and "landing" in f and f["landing"]:
         td = f["landing"]
         if "rate" in td: fpm = int(td["rate"])
@@ -119,18 +112,15 @@ def get_landing_data(f, details_type):
         if "gForce" in td: g_force = float(td["gForce"])
         if fpm != 0 or g_force != 0: found = True
 
-    # 3. Fallback (Last State - тут зазвичай немає G, але є FPM)
+    # 3. Fallback
     if not found:
         val = f.get("lastState", {}).get("speed", {}).get("touchDownRate")
         if val: 
             fpm = int(val)
             found = True
 
-    # Формуємо рядок результату
     if found and fpm != 0:
-        # Робимо FPM завжди з мінусом, якщо це зниження
         fpm_val = -abs(fpm)
-        # Якщо G = 0, не показуємо його, або показуємо як N/A
         g_str = f", **{g_force} G**" if g_force > 0 else ""
         return f"📉 **{fpm_val} fpm**{g_str}"
     
@@ -197,10 +187,12 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         t = f.get("result", {}).get("totals", {})
         dist = t.get("distance", 0)
         ftime = t.get("time", 0)
-        income = t.get("revenue", 0)
-        rating = f.get("rating", 0.0)
         
-        # ОТРИМУЄМО РЯДОК FPM + G
+        # --- FIX: INCOME vs BALANCE ---
+        # Використовуємо 'balance' (чистий прибуток), а не 'revenue' (дохід)
+        income = int(t.get("balance", 0)) 
+        
+        rating = f.get("rating", 0.0)
         landing_info = get_landing_data(f, details_type)
 
         desc = (
@@ -224,20 +216,22 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 async def on_message(message):
     if message.author == client.user: return
     if message.content == "!test":
-        await message.channel.send("🛠️ **Test with G-Force...**")
+        await message.channel.send("🛠️ **Generating test reports...**")
         mock = {
             "flightNumber": "TEST1", "airline": {"icao": "OSA"},
-            "dep": {"icao": "UKKK", "name": "Kyiv Zhuliany"}, "arr": {"icao": "UKBB", "name": "Boryspil"},
+            "dep": {"icao": "UKKK", "name": "Ihor Sikorsky Kyiv International Airport"},
+            "arr": {"icao": "UKBB", "name": "Boryspil International Airport"},
             "aircraft": {"airframe": {"name": "Boeing 737-800"}},
             "pilot": {"fullname": "Test Pilot"},
             "payload": {"pax": 100, "cargo": 1500},
             "delay": -12, "network": {"name": "VATSIM"},
-            # Імітація Landing Data
+            "landing": {"rate": -185, "gForce": 1.34},
             "result": {
-                "violations": [
-                    { "entry": { "payload": { "touchDown": {"rate": 185, "gForce": 1.34} } } }
-                ],
-                "totals": {"distance": 350, "time": 55, "revenue": 2500, "payload": {"pax": 100, "cargo": 1500}}
+                "totals": {
+                    "distance": 350, "time": 55, 
+                    "balance": -2573, # Test negative balance
+                    "payload": {"pax": 100, "cargo": 1500}
+                }
             },
             "rating": 9.9
         }
