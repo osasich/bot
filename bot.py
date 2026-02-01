@@ -91,22 +91,17 @@ def format_airport_string(icao, api_name):
         country = db_data.get("country", "XX")
         
         # --- KYIV FIX (Програмна заміна) ---
-        # Міняємо Kiev на Kyiv у назві міста
         if city.lower() == "kiev": city = "Kyiv"
-        # Міняємо Kiev на Kyiv у назві аеропорту
         name = name.replace("Kiev", "Kyiv")
         
         clean_name = clean_text(name)
-        
         display_text = ""
         
         # --- ЛОГІКА СКЛЕЮВАННЯ ---
         if city and clean_name:
-            # Якщо назва вже містить місто (напр. "London Heathrow"), то беремо тільки назву
             if city.lower() in clean_name.lower():
                 display_text = clean_name
             else:
-                # Інакше склеюємо: "Funchal" + "Madeira"
                 display_text = f"{city} {clean_name}"
         elif clean_name:
             display_text = clean_name
@@ -117,7 +112,7 @@ def format_airport_string(icao, api_name):
 
         return f"{get_flag(country)} **{icao}** ({display_text})"
     
-    # 2. FALLBACK (Тільки якщо бази немає)
+    # 2. FALLBACK (Якщо бази немає)
     flag = "🏳️"
     if len(icao) >= 2:
         prefix = icao[:2]
@@ -295,7 +290,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 async def on_message(message):
     if message.author == client.user: return
     if message.content == "!test":
-        await message.channel.send("🛠️ **Test (DB Only + Auto-Kiev Fix)...**")
+        await message.channel.send("🛠️ **Test (DB Only + Auto-Kyiv Fix)...**")
         mock = {
             "_id": "697f11b19da57b990acafff9",
             "flightNumber": "TEST1", "airline": {"icao": "OSA"},
@@ -333,6 +328,7 @@ async def main_loop():
     async with aiohttp.ClientSession() as session:
         while True:
             try:
+                # 1. Active Flights
                 ongoing = await fetch_api(session, "/flights/ongoing")
                 if ongoing and "results" in ongoing:
                     print(f"📡 Tracking {len(ongoing['results'])} flights...", end='\r')
@@ -355,6 +351,7 @@ async def main_loop():
                             await send_flight_message(channel, "Arrived", f, "ongoing")
                             state[fid]["landing"] = True
 
+                # 2. Completed Flights
                 recent = await fetch_api(session, "/flights/recent", method="POST", body={"count": 5})
                 if recent and "results" in recent:
                     for raw_f in recent["results"]:
