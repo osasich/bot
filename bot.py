@@ -6,6 +6,7 @@ import os
 import logging
 import re
 import random
+import io
 from pathlib import Path
 
 # ---------- SETTINGS ----------
@@ -237,24 +238,20 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         dist = t.get("distance", 0)
         ftime = t.get("time", 0)
         
-        # Financial & Rating Logic for Crash/Emergency
         raw_balance = int(t.get("balance", 0))
         formatted_balance = f"{raw_balance:,}".replace(",", ".")
         rating = f.get("rating", 0.0)
         
         # --- CRASH / EMERGENCY DETECTION ---
-        # Default Green
         title_text = f"😎 {full_cs} completed"
         color_code = 0x2ecc71
         
-        # 1. CRASH DETECTION (Penalty usually 1mln or rating 0 with huge negative balance)
         if raw_balance <= -900000: 
             title_text = f"💥 {full_cs} CRASHED"
-            color_code = 0x992d22 # Dark Red
-        # 2. EMERGENCY DETECTION (Balance is 0, but distance > 0)
+            color_code = 0x992d22
         elif raw_balance == 0 and dist > 1:
             title_text = f"⚠️ {full_cs} EMERGENCY"
-            color_code = 0xe67e22 # Orange
+            color_code = 0xe67e22
             
         landing_info = get_landing_data(f, details_type)
 
@@ -277,9 +274,38 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 @client.event
 async def on_message(message):
     if message.author == client.user: return
+    
+    # 🕵️ ШПИГУНСЬКА КОМАНДА (!spy ID)
+    if message.content.startswith("!spy"):
+        try:
+            parts = message.content.split()
+            if len(parts) < 2:
+                await message.channel.send("⚠️ Введи ID рейсу! Наприклад: `!spy 679f11b1...`")
+                return
+            
+            fid = parts[1]
+            await message.channel.send(f"🕵️ **Аналізую рейс {fid}...**")
+            
+            async with aiohttp.ClientSession() as session:
+                data = await fetch_api(session, f"/flight/{fid}")
+                if not data:
+                    await message.channel.send("❌ Не вдалося отримати дані. Перевір ID.")
+                    return
+                
+                # Формуємо JSON файл
+                json_str = json.dumps(data, indent=4, ensure_ascii=False)
+                file_bin = io.BytesIO(json_str.encode('utf-8'))
+                
+                await message.channel.send(
+                    content=f"📂 **Повний дамп рейсу {fid}:**",
+                    file=discord.File(file_bin, filename=f"flight_{fid}.json")
+                )
+        except Exception as e:
+            await message.channel.send(f"Error: {e}")
+
+    # TEST COMMAND
     if message.content == "!test":
         await message.channel.send("🛠️ **Test (Emergency/Crash Check)...**")
-        # 1. Normal Flight
         mock_norm = {
             "_id": "test_norm", "flightNumber": "TEST1", "airline": {"icao": "OSA"},
             "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"},
@@ -289,20 +315,6 @@ async def on_message(message):
             "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 100, "cargo": 40}}}
         }
         await send_flight_message(message.channel, "Completed", mock_norm, "test")
-        
-        # 2. Emergency Flight (Balance 0)
-        mock_emerg = mock_norm.copy()
-        mock_emerg["_id"] = "test_emerg"
-        mock_emerg["result"] = {"totals": {"distance": 350, "time": 55, "balance": 0, "payload": {"pax": 100, "cargo": 40}}}
-        await send_flight_message(message.channel, "Completed", mock_emerg, "test")
-        
-        # 3. Crash Flight (Balance -1M)
-        mock_crash = mock_norm.copy()
-        mock_crash["_id"] = "test_crash"
-        mock_crash["landing"] = {"rate": -2500, "gForce": 4.5} # Hard landing
-        mock_crash["rating"] = 0.0
-        mock_crash["result"] = {"totals": {"distance": 350, "time": 55, "balance": -1000000, "payload": {"pax": 100, "cargo": 40}}}
-        await send_flight_message(message.channel, "Completed", mock_crash, "test")
 
 async def main_loop():
     await client.wait_until_ready()
@@ -324,16 +336,13 @@ async def main_loop():
                         det = await fetch_api(session, f"/flight/{fid}")
                         if not det or "flight" not in det: continue
                         f = det["flight"]
-                        
                         cs = f.get("flightNumber") or f.get("callsign") or "N/A"
                         if cs == "N/A": continue
                         
                         state.setdefault(fid, {})
-
                         if f.get("takeoffTimeAct") and not state[fid].get("takeoff"):
                             await send_flight_message(channel, "Departed", f, "ongoing")
                             state[fid]["takeoff"] = True
-
                         if f.get("arrTimeAct") and not state[fid].get("landing"):
                             await send_flight_message(channel, "Arrived", f, "ongoing")
                             state[fid]["landing"] = True
@@ -343,18 +352,15 @@ async def main_loop():
                 if recent and "results" in recent:
                     for raw_f in recent["results"]:
                         fid = str(raw_f.get("_id") or raw_f.get("id"))
-                        
                         if first_run:
                             state.setdefault(fid, {})["completed"] = True
                             continue
-
                         if fid in state and state[fid].get("completed"): continue
                         if not raw_f.get("close"): continue
 
                         det = await fetch_api(session, f"/flight/{fid}")
                         if not det or "flight" not in det: continue
                         f = det["flight"]
-                        
                         cs = f.get("flightNumber") or f.get("callsign") or "N/A"
                         if cs == "N/A": continue
 
