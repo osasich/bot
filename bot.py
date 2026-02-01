@@ -15,6 +15,11 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else 0
 NEWSKY_API_KEY = os.getenv("NEWSKY_API_KEY")
 
+# 👇 ВПИШИ СЮДИ СВІЙ ID (Можна декілька через кому) 👇
+ADMIN_IDS = [
+    598767470140063744,  # <-- ЗАМІНИ ЦЕ НА СВІЙ ID
+]
+
 STATE_FILE = Path("sent.json")
 STATUS_FILE = Path("statuses.json") # 💾 Файл для збереження статусів
 CHECK_INTERVAL = 30
@@ -30,18 +35,9 @@ client = discord.Client(intents=intents)
 # Глобальна змінна для бази
 AIRPORTS_DB = {}
 
-# --- 🎭 СТАНДАРТНІ СТАТУСИ ---
+# --- 🎭 СТАНДАРТНІ СТАТУСИ (Якщо файл пустий) ---
 DEFAULT_STATUSES = [
-    {
-        "type": "stream", 
-        "name": "🔴 KAZUAR AVIA", 
-        "url": "https://www.youtube.com/@KAZUARAVIA"
-    },
-    {
-        "type": "play",  
-        "name": "🕹️ Tracking with Newsky.app",
-        "url": None
-    }
+    {"type": "play",  "name": "🕹️ Tracking with Newsky.app"}
 ]
 
 # ---------- ДОПОМІЖНІ ФУНКЦІЇ ----------
@@ -56,7 +52,7 @@ def save_state(state):
         STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
     except: pass
 
-# 👇 ЗБЕРЕЖЕННЯ СТАТУСІВ 👇
+# 👇 НОВІ ФУНКЦІЇ ДЛЯ ЗБЕРЕЖЕННЯ СТАТУСІВ 👇
 def load_statuses():
     if not STATUS_FILE.exists():
         return list(DEFAULT_STATUSES)
@@ -305,24 +301,17 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     if embed:
         await channel.send(embed=embed)
 
-# --- 🔄 РОТАЦІЯ СТАТУСІВ (ПІДТРИМКА URL) ---
+# --- 🔄 РОТАЦІЯ СТАТУСІВ ---
 async def change_status():
     current_status = next(status_cycle)
     activity_type = discord.ActivityType.playing
     
-    s_type_str = current_status.get("type", "play")
-    s_url = current_status.get("url")
-
-    if s_type_str == "watch":
+    if current_status["type"] == "watch":
         activity_type = discord.ActivityType.watching
-    elif s_type_str == "listen":
+    elif current_status["type"] == "listen":
         activity_type = discord.ActivityType.listening
-    elif s_type_str == "stream":
-        activity_type = discord.ActivityType.streaming
-    elif s_type_str == "compete":
-        activity_type = discord.ActivityType.competing
         
-    await client.change_presence(activity=discord.Activity(type=activity_type, name=current_status["name"], url=s_url))
+    await client.change_presence(activity=discord.Activity(type=activity_type, name=current_status["name"]))
 
 async def status_loop():
     await client.wait_until_ready()
@@ -334,73 +323,62 @@ async def status_loop():
 async def on_message(message):
     if message.author == client.user: return
     
-    is_admin = message.author.guild_permissions.administrator if message.guild else False
+    # 🔥🔥🔥 ПЕРЕВІРКА АДМІНА (Server Admin + Manual ID) 🔥🔥🔥
+    is_admin = False
+    
+    # 1. Перевірка: чи це ти (по ID)
+    if message.author.id in ADMIN_IDS:
+        is_admin = True
+    # 2. Перевірка: чи має користувач адмінку на сервері (стара логіка)
+    elif message.guild and message.author.guild_permissions.administrator:
+        is_admin = True
 
-    # 📚 HELP COMMAND
+    # 📚 HELP COMMAND (ALL VISIBLE)
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n"
         desc += "**`!help`** — Show this list\n\n"
         
-        desc += "**🔒 Admin / System:**\n"
+        desc += "**🔒 Admin / System (Restricted):**\n"
         desc += "**`!status`** — System status\n"
         desc += "**`!test [min]`** — Run test scenarios\n"
         desc += "**`!spy <ID>`** — Dump flight JSON\n\n"
         
-        desc += "**🎭 Status Management:**\n"
+        desc += "**🎭 Status Management (Admin):**\n"
         desc += "**`!next`** — Force next status\n"
-        desc += "**`!addstatus <type> <text>`** — Add regular status\n"
-        desc += "**`!addstatus stream <url> <text>`** — Add STREAM status\n"
+        desc += "**`!addstatus <type> <text>`** — Save & Add status\n"
         desc += "**`!delstatus [num]`** — Delete status\n"
-        desc += "*Types: play, watch, listen, stream, compete*"
             
         embed.description = desc
         await message.channel.send(embed=embed)
         return
     
-    # ⏩ NEXT STATUS
+    # ⏩ NEXT STATUS (ADMIN)
     if message.content == "!next":
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         await change_status()
         await message.channel.send("✅ **Status switched!**")
         return
 
-    # ➕ ADD STATUS (З ЛОГІКОЮ ДЛЯ СТРІМУ)
+    # ➕ ADD STATUS (ADMIN - PERSISTENT)
     if message.content.startswith("!addstatus"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
-        
-        parts = message.content.split()
-        
-        if len(parts) < 3:
-            return await message.channel.send("⚠️ Usage:\n`!addstatus <play/watch/listen> <text>`\n`!addstatus stream <URL> <text>`")
+        parts = message.content.split(maxsplit=2)
+        if len(parts) < 3: return await message.channel.send("⚠️ Usage: `!addstatus <watch/play> <text>`")
         
         sType = parts[1].lower()
-        valid_types = ["play", "watch", "listen", "stream", "compete"]
+        if sType not in ["watch", "play", "listen"]: return await message.channel.send("⚠️ Use: `watch`, `play`, `listen`")
         
-        if sType not in valid_types:
-            return await message.channel.send(f"⚠️ Invalid type. Use: {', '.join(valid_types)}")
-        
-        new_status = {"type": sType, "name": "", "url": None}
-
-        # Якщо це стрім - третій аргумент це URL
-        if sType == "stream":
-            if len(parts) < 4:
-                return await message.channel.send("⚠️ For stream, usage is: `!addstatus stream <URL> <Text>`")
-            new_status["url"] = parts[2]
-            new_status["name"] = " ".join(parts[3:])
-        else:
-            # Для інших - просто текст
-            new_status["name"] = " ".join(parts[2:])
-        
-        status_list.append(new_status)
-        save_statuses()
+        # Додаємо у список
+        status_list.append({"type": sType, "name": parts[2]})
+        save_statuses() # <--- ЗБЕРІГАЄМО У ФАЙЛ
         
         global status_cycle
-        status_cycle = cycle(status_list)
-        await message.channel.send(f"✅ Saved & Added: **{sType.upper()}** - {new_status['name']}")
+        status_cycle = cycle(status_list) # Оновлюємо цикл
+        await message.channel.send(f"✅ Saved & Added: **{parts[2]}**")
         return
 
-    # ➖ DELETE STATUS
+    # ➖ DELETE STATUS (ADMIN - PERSISTENT)
     if message.content.startswith("!delstatus"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         
@@ -416,10 +394,10 @@ async def on_message(message):
                 if len(status_list) <= 1: return await message.channel.send("⚠️ Cannot delete the last status!")
                 
                 removed = status_list.pop(idx)
-                save_statuses()
+                save_statuses() # <--- ЗБЕРІГАЄМО ЗМІНИ У ФАЙЛ
                 
                 status_cycle = cycle(status_list) 
-                await message.channel.send(f"🗑️ Deleted: **{removed['name']}**")
+                await message.channel.send(f"🗑️ Deleted & Saved: **{removed['name']}**")
             else:
                 await message.channel.send("⚠️ Invalid number.")
         except ValueError:
