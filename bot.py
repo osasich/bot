@@ -277,8 +277,8 @@ async def on_message(message):
         commands_list = (
             "**`!help`** — list of commands\n"
             "**`!status`** — сheck system status\n"
-            "**`!test`** — Run test scenarios\n"
-            "**`!spy ID`** — Dump raw flight JSON data"
+            "**`!test`** — run test scenarios\n"
+            "**`!spy ID`** — dump raw flight JSON data\n"
         )
         
         embed.description = commands_list
@@ -405,5 +405,6 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
+
 
 
