@@ -270,20 +270,18 @@ async def on_message(message):
     
     is_admin = message.author.guild_permissions.administrator if message.guild else False
 
-    # 📚 HELP COMMAND (ALL COMMANDS VISIBLE TO EVERYONE)
+    # 📚 HELP COMMAND (SIMPLE LIST)
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         
-        # Public Commands
-        embed.add_field(name="🔹 User Commands", value="`!help` - Show this list", inline=False)
+        commands_list = (
+            "**`!help`** — Показати цей список\n"
+            "**`!status`** — Статус системи (Admin only)\n"
+            "**`!test`** — Тест сповіщень (Admin only)\n"
+            "**`!spy <ID>`** — Дамп даних рейсу (Admin only)"
+        )
         
-        # Admin Commands (Visible to all, usable by Admin only)
-        embed.add_field(name="🔒 Admin Commands (Restricted)", value=(
-            "`!status` - Check system status\n"
-            "`!test` - Run test scenarios (Normal, Emergency, Crash)\n"
-            "`!spy <ID>` - Dump raw flight JSON data"
-        ), inline=False)
-             
+        embed.description = commands_list
         await message.channel.send(embed=embed)
         return
 
@@ -407,3 +405,4 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
+
