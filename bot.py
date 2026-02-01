@@ -237,7 +237,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         raw_pax = f.get("payload", {}).get("pax", 0)
         raw_cargo_units = f.get("payload", {}).get("cargo", 0)
     
-    cargo_kg = int(raw_cargo_units * 108)
+    cargo_kg = int(raw_cargo_units * 112)
 
     embed = None
     arrow = " \u2003➡️\u2003 "
@@ -524,3 +524,4 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
+
