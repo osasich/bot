@@ -134,10 +134,8 @@ async def fetch_api(session, path, method="GET", body=None):
 
 # ---------- MESSAGE GENERATOR ----------
 async def send_flight_message(channel, status, f, details_type="ongoing"):
-    # Отримуємо ID рейсу для посилання
+    # Links setup
     fid = f.get("_id") or f.get("id") or "test_id"
-    
-    # Генеруємо посилання залежно від статусу
     if status == "Completed":
         flight_url = f"https://newsky.app/flight/{fid}"
     else:
@@ -155,16 +153,24 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     ac = f.get("aircraft", {}).get("airframe", {}).get("name", "A/C")
     pilot = f.get("pilot", {}).get("fullname", "Pilot")
     
+    # --- CARGO CALCULATION (Units -> KG) ---
+    # 1 Unit = 108 kg
+    raw_pax = 0
+    raw_cargo_units = 0
+
     if details_type == "result":
-        pax = f.get("result", {}).get("totals", {}).get("payload", {}).get("pax", 0)
-        cargo = f.get("result", {}).get("totals", {}).get("payload", {}).get("cargo", 0)
+        raw_pax = f.get("result", {}).get("totals", {}).get("payload", {}).get("pax", 0)
+        raw_cargo_units = f.get("result", {}).get("totals", {}).get("payload", {}).get("cargo", 0)
     else:
-        pax = f.get("payload", {}).get("pax", 0)
-        cargo = f.get("payload", {}).get("cargo", 0)
+        raw_pax = f.get("payload", {}).get("pax", 0)
+        raw_cargo_units = f.get("payload", {}).get("cargo", 0)
+    
+    # Conversion
+    cargo_kg = int(raw_cargo_units * 108)
 
     embed = None
 
-    # === 1. DEPARTED (Link to MAP) ===
+    # === 1. DEPARTED ===
     if status == "Departed":
         delay = f.get("delay", 0)
         desc = (
@@ -172,12 +178,11 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             f"✈️ **{ac}**\n\n"
             f"{get_timing(delay)}\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
-            f"👫 **{pax}** Pax  |  📦 **{cargo}** kg"
+            f"👫 **{raw_pax}** Pax  |  📦 **{cargo_kg}** kg"
         )
-        # Додаємо url=flight_url
         embed = discord.Embed(title=f"🛫 {full_cs} departed", url=flight_url, description=desc, color=0x3498db)
 
-    # === 2. ARRIVED (Link to MAP) ===
+    # === 2. ARRIVED ===
     elif status == "Arrived":
         delay = f.get("delay", 0)
         desc = (
@@ -185,12 +190,11 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             f"✈️ **{ac}**\n\n"
             f"{get_timing(delay)}\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
-            f"👫 **{pax}** Pax  |  📦 **{cargo}** kg"
+            f"👫 **{raw_pax}** Pax  |  📦 **{cargo_kg}** kg"
         )
-        # Додаємо url=flight_url
         embed = discord.Embed(title=f"🛬 {full_cs} arrived", url=flight_url, description=desc, color=0x3498db)
 
-    # === 3. COMPLETED (Link to FLIGHT REPORT) ===
+    # === 3. COMPLETED ===
     elif status == "Completed":
         net_data = f.get("network")
         net = (net_data.get("name") if isinstance(net_data, dict) else str(net_data)) or "OFFLINE"
@@ -198,7 +202,11 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         t = f.get("result", {}).get("totals", {})
         dist = t.get("distance", 0)
         ftime = t.get("time", 0)
-        income = int(t.get("balance", 0)) # Correct balance
+        
+        # --- MONEY FORMATTING ---
+        raw_balance = int(t.get("balance", 0))
+        # Форматуємо як 2,953, потім замінюємо кому на крапку -> 2.953
+        formatted_balance = f"{raw_balance:,}".replace(",", ".")
         
         rating = f.get("rating", 0.0)
         landing_info = get_landing_data(f, details_type)
@@ -209,12 +217,11 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             f"👨‍✈️ **{pilot}**\n\n"
             f"🌐 **{net.upper()}**\n\n"
             f"{landing_info}\n\n" 
-            f"👫 **{pax}** Pax  |  📦 **{cargo}** kg\n\n"
+            f"👫 **{raw_pax}** Pax  |  📦 **{cargo_kg}** kg\n\n"
             f"📏 **{dist}** nm  |  ⏱️ **{format_time(ftime)}**\n\n"
-            f"💰 **{income} $**\n\n"
+            f"💰 **{formatted_balance} $**\n\n"
             f"{get_rating_square(rating)} **{rating}**"
         )
-        # Додаємо url=flight_url (тут вже веде на звіт /flight/)
         embed = discord.Embed(title=f"😎 {full_cs} completed", url=flight_url, description=desc, color=0x2ecc71)
 
     if embed:
@@ -225,22 +232,22 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 async def on_message(message):
     if message.author == client.user: return
     if message.content == "!test":
-        await message.channel.send("🛠️ **Generating test reports with links...**")
+        await message.channel.send("🛠️ **Test (Links + Cargo Unit Convert + Money Format)...**")
         mock = {
-            "_id": "697f11b19da57b990acafff9", # Fake ID for link testing
+            "_id": "697f11b19da57b990acafff9",
             "flightNumber": "TEST1", "airline": {"icao": "OSA"},
             "dep": {"icao": "UKKK", "name": "Ihor Sikorsky Kyiv International Airport"},
             "arr": {"icao": "UKBB", "name": "Boryspil International Airport"},
             "aircraft": {"airframe": {"name": "Boeing 737-800"}},
             "pilot": {"fullname": "Test Pilot"},
-            "payload": {"pax": 100, "cargo": 1500},
+            "payload": {"pax": 100, "cargo": 40}, # 40 Units * 108 = 4320 kg
             "delay": -12, "network": {"name": "VATSIM"},
             "landing": {"rate": -185, "gForce": 1.34},
             "result": {
                 "totals": {
                     "distance": 350, "time": 55, 
-                    "balance": -2573,
-                    "payload": {"pax": 100, "cargo": 1500}
+                    "balance": -257350, # Test large negative number (-257.350)
+                    "payload": {"pax": 100, "cargo": 40}
                 }
             },
             "rating": 9.9
