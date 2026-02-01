@@ -43,15 +43,15 @@ def clean_text(text):
     """Чистить назву від зайвих слів"""
     if not text: return ""
     text = re.sub(r"\(.*?\)", "", text) # Видаляє дужки
-    # Список слів для видалення (Case sensitive strategy via replace)
+    # Список слів для видалення
     removals = ["International", "Regional", "Airport", "Aerodrome", "Air Base", "Intl", "  "]
     for word in removals:
+        # replace case insensitive strategy can be complex, doing simple clean here
         text = text.replace(word, "")
     return text.strip().strip(",")
 
-# --- 🌍 ОНОВЛЕНА ЛОГІКА БАЗИ ДАНИХ ---
+# --- 🌍 ЗАВАНТАЖЕННЯ БАЗИ ---
 async def update_airports_db():
-    """Качає базу: ICAO -> {Country, City, Name}"""
     global AIRPORTS_DB
     print("🌍 Downloading airports database...")
     async with aiohttp.ClientSession() as session:
@@ -59,7 +59,6 @@ async def update_airports_db():
             async with session.get(AIRPORTS_DB_URL) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    # Зберігаємо більше даних: країну, місто, назву
                     AIRPORTS_DB = {}
                     for k, v in data.items():
                         AIRPORTS_DB[k] = {
@@ -73,59 +72,62 @@ async def update_airports_db():
         except Exception as e:
             print(f"⚠️ Error loading DB: {e}")
 
-def get_flag(icao):
-    """Шукає країну по ICAO і робить прапор"""
-    if not icao: return "🏳️"
-    icao = icao.upper()
-    country_code = "XX"
-    
-    # 1. Шукаємо в базі
-    if icao in AIRPORTS_DB:
-        country_code = AIRPORTS_DB[icao].get("country", "XX")
-    # 2. Backup по префіксу
-    elif len(icao) >= 2:
-        prefix = icao[:2]
-        manual_map = {'UK': 'UA', 'KJ': 'US', 'K': 'US', 'EG': 'GB', 'LF': 'FR', 'ED': 'DE'}
-        country_code = manual_map.get(prefix, "XX")
-
-    if country_code == "XX" or len(country_code) != 2:
-        return "🏳️"
-
+def get_flag(country_code):
+    if not country_code or country_code == "XX": return "🏳️"
     return "".join([chr(ord(c) + 127397) for c in country_code.upper()])
 
+# --- 🧠 РОЗУМНЕ ФОРМУВАННЯ НАЗВИ ---
 def format_airport_string(icao, api_name):
     """
-    Формує рядок: 🇺🇦 UKKK (Kyiv, Zhuliany)
-    Бере дані з бази. Якщо немає в базі - бере з API.
+    Формує: 🇺🇦 UKBB (Kyiv Boryspil)
+    Логіка: City + Name (якщо Name не містить City).
+    Fix: Kiev -> Kyiv.
     """
-    flag = get_flag(icao)
     icao = icao.upper()
     
+    # 1. Дані з бази
     db_data = AIRPORTS_DB.get(icao)
     
     if db_data:
-        city = db_data.get("city", "")
-        name = clean_text(db_data.get("name", ""))
+        city = db_data.get("city", "") or ""
+        name = db_data.get("name", "") or ""
+        country = db_data.get("country", "XX")
         
-        # Якщо є і місто і назва
-        if city and name:
-            # Іноді назва вже містить місто (London Heathrow), тоді не дублюємо
-            if city.lower() in name.lower():
-                display_text = f"{city}, {name.replace(city, '').strip()}"
+        # --- FIX: KIEV -> KYIV ---
+        if city == "Kiev": city = "Kyiv"
+        name = name.replace("Kiev", "Kyiv")
+        
+        # Чистимо назву від "Airport", "International"
+        clean_name = clean_text(name)
+        
+        display_text = ""
+        
+        # --- ЛОГІКА ОБ'ЄДНАННЯ ---
+        if city and clean_name:
+            # Якщо назва вже містить місто (напр. "London Heathrow"), то не дублюємо місто
+            if city.lower() in clean_name.lower():
+                display_text = clean_name
             else:
-                display_text = f"{city}, {name}"
-        elif name:
-            display_text = name
+                # Інакше склеюємо: "Funchal Madeira"
+                display_text = f"{city} {clean_name}"
+        elif clean_name:
+            display_text = clean_name
         elif city:
             display_text = city
         else:
             display_text = clean_text(api_name) # Fallback
-            
-        # Фінальна зачистка ком і пробілів
-        display_text = display_text.strip(" ,")
-        return f"{flag} **{icao}** ({display_text})"
+
+        return f"{get_flag(country)} **{icao}** ({display_text})"
     
-    # Якщо аеропорту немає в базі Інтернету - беремо назву з Newsky
+    # Якщо немає в базі - Fallback
+    flag = "🏳️"
+    if len(icao) >= 2:
+        prefix = icao[:2]
+        # Простий мапінг для backup прапорів
+        manual_map = {'UK': 'UA', 'KJ': 'US', 'K': 'US', 'EG': 'GB', 'LF': 'FR', 'ED': 'DE'}
+        code = manual_map.get(prefix, "XX")
+        flag = get_flag(code)
+        
     return f"{flag} **{icao}** ({clean_text(api_name)})"
 
 def get_timing(delay):
@@ -215,7 +217,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     airline = f.get("airline", {}).get("icao", "")
     full_cs = f"{airline} {cs}" if airline else cs
     
-    # --- AIRPORT FORMATTING (NEW) ---
+    # --- AIRPORT FORMATTING ---
     dep_icao = f.get("dep", {}).get("icao", "????")
     dep_api_name = f.get("dep", {}).get("name", "")
     dep_str = format_airport_string(dep_icao, dep_api_name)
@@ -302,12 +304,12 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 async def on_message(message):
     if message.author == client.user: return
     if message.content == "!test":
-        await message.channel.send("🛠️ **Test (Cities + Names)...**")
+        await message.channel.send("🛠️ **Test (Kyiv Fix + City Names)...**")
         mock = {
             "_id": "697f11b19da57b990acafff9",
             "flightNumber": "TEST1", "airline": {"icao": "OSA"},
-            "dep": {"icao": "KJFK", "name": "John F. Kennedy International Airport"}, 
-            "arr": {"icao": "EGLL", "name": "Heathrow Airport"}, 
+            "dep": {"icao": "UKBB", "name": "Boryspil International Airport"}, # Test Kyiv Fix
+            "arr": {"icao": "LPMA", "name": "Madeira Airport"}, # Test Funchal Madeira
             "aircraft": {"airframe": {"name": "Boeing 737-800"}},
             "pilot": {"fullname": "Test Pilot"},
             "payload": {"pax": 100, "cargo": 40}, 
