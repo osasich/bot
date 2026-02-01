@@ -36,7 +36,7 @@ DEFAULT_STATUSES = [
     {"type": "play",  "name": "🕹️ Tracking with Newsky.app"}
 ]
 
-# --- 📚 БАЗА ЖАРТІВ (НОВІ ПРОМІЖКИ) ---
+# --- 📚 БАЗА ЖАРТІВ (REALISTIC RANGES) ---
 FPM_DB = {
     "butter": [ # 0 - 60 fpm
         "Ти привид? Сенсори кажуть 0 G.",
@@ -476,5 +476,4 @@ async def on_message(message):
                 save_statuses()
                 status_cycle = cycle(status_list) 
                 await message.channel.send(f"🗑️ Deleted & Saved: **{removed['name']}**")
-            else: await message.channel.send("⚠️ Invalid number.")
- 
+            else: await message.channel.send("⚠️ Invalid number."
