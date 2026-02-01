@@ -275,10 +275,10 @@ async def on_message(message):
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         
         commands_list = (
-            "**`!help`** — Показати цей список\n"
-            "**`!status`** — Статус системи (Admin only)\n"
-            "**`!test`** — Тест сповіщень (Admin only)\n"
-            "**`!spy <ID>`** — Дамп даних рейсу (Admin only)"
+            "**`!help`** — list of commands\n"
+            "**`!status`** — сheck system status\n"
+            "**`!test`** — Run test scenarios\n"
+            "**`!spy ID`** — Dump raw flight JSON data"
         )
         
         embed.description = commands_list
@@ -405,4 +405,5 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
+
 
