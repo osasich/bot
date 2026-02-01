@@ -8,6 +8,7 @@ import re
 import random
 import io
 from pathlib import Path
+from itertools import cycle
 
 # ---------- НАЛАШТУВАННЯ ----------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -27,6 +28,13 @@ client = discord.Client(intents=intents)
 
 # Глобальна змінна для бази
 AIRPORTS_DB = {}
+
+# --- 🎭 СИСТЕМА СТАТУСІВ ---
+status_list = [
+    {"type": "watch", "name": "🔴 YouTube KAZUAR AVIA"},
+    {"type": "play",  "name": "🕹️ Tracking with Newsky.app"}
+]
+status_cycle = cycle(status_list)
 
 # ---------- ДОПОМІЖНІ ФУНКЦІЇ ----------
 def load_state():
@@ -88,7 +96,6 @@ def format_airport_string(icao, api_name):
         name = db_data.get("name", "") or ""
         country = db_data.get("country", "XX")
         
-        # --- KYIV FIX ---
         if city.lower() == "kiev": city = "Kyiv"
         name = name.replace("Kiev", "Kyiv")
         
@@ -238,7 +245,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         title_text = f"😎 {full_cs} completed"
         color_code = 0x2ecc71
         
-        # LOGIC FOR EMEG/CRASH/RATING
         rating_str = f"{get_rating_square(rating)} **{rating}**"
 
         if raw_balance <= -900000: 
@@ -270,33 +276,107 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     if embed:
         await channel.send(embed=embed)
 
+# --- 🔄 РОТАЦІЯ СТАТУСІВ ---
+async def change_status():
+    current_status = next(status_cycle)
+    activity_type = discord.ActivityType.playing
+    
+    if current_status["type"] == "watch":
+        activity_type = discord.ActivityType.watching
+    elif current_status["type"] == "listen":
+        activity_type = discord.ActivityType.listening
+        
+    await client.change_presence(activity=discord.Activity(type=activity_type, name=current_status["name"]))
+
+async def status_loop():
+    await client.wait_until_ready()
+    while not client.is_closed():
+        await change_status()
+        await asyncio.sleep(3600) # 1 година
+
 @client.event
 async def on_message(message):
     if message.author == client.user: return
     
     is_admin = message.author.guild_permissions.administrator if message.guild else False
 
-    # 📚 HELP COMMAND (SIMPLE LIST)
+    # 📚 HELP COMMAND (CONDITIONAL)
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
-        commands_list = (
-            "**`!help`** — list of commands\n"
-            "**`!status`** — сheck system status\n"
-            "**`!test`** — run all scenarios\n"
-            "**`!test min`** — run custom delay test\n"
-            "**`!spy ID`** — dump raw flight JSON data\n"
-        )
-        embed.description = commands_list
+        
+        # Для всіх
+        desc = "**`!help`** — Show this list\n"
+        
+        # Тільки для адмінів
+        if is_admin:
+            desc += "\n**🔒 Admin / System:**\n"
+            desc += "**`!status`** — System status\n"
+            desc += "**`!test [min]`** — Run tests (default or custom delay)\n"
+            desc += "**`!spy <ID>`** — Dump flight JSON\n"
+            
+            desc += "\n**🎭 Status Management:**\n"
+            desc += "**`!next`** — Force next status\n"
+            desc += "**`!addstatus <type> <text>`** — Add status\n"
+            desc += "**`!delstatus [num]`** — Delete status (type without num to list)\n"
+            
+        embed.description = desc
         await message.channel.send(embed=embed)
+        return
+    
+    # ⏩ NEXT STATUS (ADMIN)
+    if message.content == "!next":
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+        await change_status()
+        await message.channel.send("✅ **Status switched!**")
+        return
+
+    # ➕ ADD STATUS (ADMIN)
+    if message.content.startswith("!addstatus"):
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+        parts = message.content.split(maxsplit=2)
+        if len(parts) < 3: return await message.channel.send("⚠️ Usage: `!addstatus <watch/play> <text>`")
+        
+        sType = parts[1].lower()
+        if sType not in ["watch", "play", "listen"]: return await message.channel.send("⚠️ Use: `watch`, `play`, `listen`")
+        
+        status_list.append({"type": sType, "name": parts[2]})
+        global status_cycle
+        status_cycle = cycle(status_list) # Update cycle
+        await message.channel.send(f"✅ Added: **{parts[2]}**")
+        return
+
+    # ➖ DELETE STATUS (ADMIN)
+    if message.content.startswith("!delstatus"):
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+        
+        parts = message.content.split()
+        
+        # Якщо не ввели номер - показуємо список
+        if len(parts) == 1:
+            list_str = "\n".join([f"`{i+1}.` {s['type'].upper()}: {s['name']}" for i, s in enumerate(status_list)])
+            embed = discord.Embed(title="🗑️ Delete Status", description=f"Type `!delstatus <number>` to delete.\n\n{list_str}", color=0xe74c3c)
+            return await message.channel.send(embed=embed)
+        
+        try:
+            idx = int(parts[1]) - 1
+            if 0 <= idx < len(status_list):
+                if len(status_list) <= 1:
+                    return await message.channel.send("⚠️ Cannot delete the last status!")
+                
+                removed = status_list.pop(idx)
+                status_cycle = cycle(status_list) # Refresh cycle
+                await message.channel.send(f"🗑️ Deleted: **{removed['name']}**")
+            else:
+                await message.channel.send("⚠️ Invalid number.")
+        except ValueError:
+            await message.channel.send("⚠️ Please enter a number.")
         return
 
     # 📡 STATUS COMMAND
     if message.content == "!status":
-        if not is_admin:
-            return await message.channel.send("🚫 **Access Denied:** Administrator rights required.")
-        
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         msg = await message.channel.send("🔄 **Checking Systems...**")
-        api_status = "❌ API Error / Invalid Key"
+        api_status = "❌ API Error"
         async with aiohttp.ClientSession() as session:
             test = await fetch_api(session, "/flights/ongoing")
             if test is not None: api_status = "✅ Connected to Newsky"
@@ -310,9 +390,7 @@ async def on_message(message):
 
     # 🕵️ SPY COMMAND
     if message.content.startswith("!spy"):
-        if not is_admin:
-            return await message.channel.send("🚫 **Access Denied:** Administrator rights required.")
-        
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         try:
             parts = message.content.split()
             if len(parts) < 2: return await message.channel.send("⚠️ Usage: `!spy <ID>`")
@@ -326,52 +404,27 @@ async def on_message(message):
         except Exception as e: await message.channel.send(f"Error: {e}")
         return
 
-    # 🛠️ TEST COMMAND (CUSTOM + ALL)
+    # 🛠️ TEST COMMAND
     if message.content.startswith("!test"):
-        if not is_admin:
-            return await message.channel.send("🚫 **Access Denied:** Administrator rights required.")
-
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         parts = message.content.split()
-        
-        # ВАРІАНТ 1: Користувацька затримка (!test -15, !test 40)
         if len(parts) == 2:
             try:
                 custom_delay = int(parts[1])
                 await message.channel.send(f"🛠️ **Custom Test (Delay: {custom_delay} min)...**")
-                
-                mock_custom = {
-                    "_id": "test_custom", "flightNumber": "TEST1", "airline": {"icao": "OSA"},
-                    "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"},
-                    "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"},
-                    "payload": {"pax": 140, "cargo": 35}, "network": "VATSIM", "rating": 9.9,
-                    "landing": {"rate": -120, "gForce": 1.05},
-                    "delay": custom_delay, # <--- Сюди ставимо твою цифру
-                    "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 140, "cargo": 35}}}
-                }
+                mock_custom = {"_id": "test_custom", "flightNumber": "TEST1", "airline": {"icao": "OSA"}, "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"}, "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"}, "payload": {"pax": 140, "cargo": 35}, "network": "VATSIM", "rating": 9.9, "landing": {"rate": -120, "gForce": 1.05}, "delay": custom_delay, "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 140, "cargo": 35}}}}
                 await send_flight_message(message.channel, "Completed", mock_custom, "test")
                 return
-            except ValueError:
-                pass # Якщо ввели не число, йдемо до звичайного тесту
+            except ValueError: pass
 
-        # ВАРІАНТ 2: Повний набір тестів (!test)
         await message.channel.send("🛠️ **Running Full Test Suite...**")
-        
-        # 1. DEPARTED
         mock_dep = {"_id": "test_dep", "flightNumber": "TEST1", "airline": {"icao": "OSA"}, "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"}, "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"}, "payload": {"pax": 145, "cargo": 35}, "delay": 2}
         await send_flight_message(message.channel, "Departed", mock_dep, "test")
-
-        # 2. NORMAL
         mock_norm = {"_id": "test_norm", "flightNumber": "TEST1", "airline": {"icao": "OSA"}, "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"}, "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"}, "payload": {"pax": 100, "cargo": 40}, "network": "VATSIM", "rating": 9.9, "landing": {"rate": -150, "gForce": 1.1}, "delay": -10, "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 100, "cargo": 40}}}}
         await send_flight_message(message.channel, "Completed", mock_norm, "test")
-        
-        # 3. EMERGENCY
-        mock_emerg = mock_norm.copy()
-        mock_emerg["_id"] = "test_emerg"; mock_emerg["emergency"] = True; mock_emerg["delay"] = 45; mock_emerg["result"] = {"totals": {"distance": 350, "time": 55, "balance": 0, "payload": {"pax": 100, "cargo": 40}}}
+        mock_emerg = mock_norm.copy(); mock_emerg["_id"] = "test_emerg"; mock_emerg["emergency"] = True; mock_emerg["delay"] = 45; mock_emerg["result"] = {"totals": {"distance": 350, "time": 55, "balance": 0, "payload": {"pax": 100, "cargo": 40}}}
         await send_flight_message(message.channel, "Completed", mock_emerg, "test")
-        
-        # 4. CRASH
-        mock_crash = mock_norm.copy()
-        mock_crash["_id"] = "test_crash"; mock_crash["landing"] = {"rate": -2500, "gForce": 4.5}; mock_crash["rating"] = 0.0; mock_crash["delay"] = 0; mock_crash["result"] = {"totals": {"distance": 350, "time": 55, "balance": -1150000, "payload": {"pax": 100, "cargo": 40}}}
+        mock_crash = mock_norm.copy(); mock_crash["_id"] = "test_crash"; mock_crash["landing"] = {"rate": -2500, "gForce": 4.5}; mock_crash["rating"] = 0.0; mock_crash["delay"] = 0; mock_crash["result"] = {"totals": {"distance": 350, "time": 55, "balance": -1150000, "payload": {"pax": 100, "cargo": 40}}}
         await send_flight_message(message.channel, "Completed", mock_crash, "test")
         return
 
@@ -399,12 +452,9 @@ async def main_loop():
                         
                         state.setdefault(fid, {})
                         
-                        # --- DEPARTED ---
                         if f.get("takeoffTimeAct") and not state[fid].get("takeoff"):
                             await send_flight_message(channel, "Departed", f, "ongoing")
                             state[fid]["takeoff"] = True
-                        
-                        # --- ARRIVED REMOVED (NO SPAM) ---
 
                 recent = await fetch_api(session, "/flights/recent", method="POST", body={"count": 5})
                 if recent and "results" in recent:
@@ -414,31 +464,4 @@ async def main_loop():
                             state.setdefault(fid, {})["completed"] = True
                             continue
                         if fid in state and state[fid].get("completed"): continue
-                        if not raw_f.get("close"): continue
-
-                        det = await fetch_api(session, f"/flight/{fid}")
-                        if not det or "flight" not in det: continue
-                        f = det["flight"]
-                        cs = f.get("flightNumber") or f.get("callsign") or "N/A"
-                        if cs == "N/A": continue
-
-                        await send_flight_message(channel, "Completed", f, "result")
-                        state.setdefault(fid, {})["completed"] = True
-                        print(f"✅ Report Sent: {cs}")
-                
-                if first_run:
-                    print("🔕 First run sync complete. No spam.")
-                    first_run = False
-
-                save_state(state)
-            except Exception as e: print(f"Loop Error: {e}")
-            await asyncio.sleep(CHECK_INTERVAL)
-
-@client.event
-async def on_ready():
-    print(f"✅ Bot online: {client.user}")
-    print("🚀 MONITORING STARTED")
-    client.loop.create_task(main_loop())
-
-client.run(DISCORD_TOKEN)
-
+                        if not raw_f.get("close")
