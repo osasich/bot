@@ -56,7 +56,6 @@ async def update_airports_db():
         try:
             async with session.get(AIRPORTS_DB_URL) as resp:
                 if resp.status == 200:
-                    # content_type=None обов'язково для GitHub raw файлів
                     data = await resp.json(content_type=None)
                     AIRPORTS_DB = {}
                     for k, v in data.items():
@@ -78,11 +77,9 @@ def get_flag(country_code):
     except:
         return "🏳️"
 
-# --- 🧠 РОЗУМНЕ ФОРМУВАННЯ НАЗВИ (ТІЛЬКИ З БАЗИ) ---
+# --- 🧠 РОЗУМНЕ ФОРМУВАННЯ НАЗВИ ---
 def format_airport_string(icao, api_name):
     icao = icao.upper()
-    
-    # 1. ШУКАЄМО В БАЗІ
     db_data = AIRPORTS_DB.get(icao)
     
     if db_data:
@@ -90,14 +87,13 @@ def format_airport_string(icao, api_name):
         name = db_data.get("name", "") or ""
         country = db_data.get("country", "XX")
         
-        # --- KYIV FIX (Програмна заміна) ---
+        # --- KYIV FIX ---
         if city.lower() == "kiev": city = "Kyiv"
         name = name.replace("Kiev", "Kyiv")
         
         clean_name = clean_text(name)
         display_text = ""
         
-        # --- ЛОГІКА СКЛЕЮВАННЯ ---
         if city and clean_name:
             if city.lower() in clean_name.lower():
                 display_text = clean_name
@@ -112,17 +108,12 @@ def format_airport_string(icao, api_name):
 
         return f"{get_flag(country)} **{icao}** ({display_text})"
     
-    # 2. FALLBACK (Якщо бази немає)
     flag = "🏳️"
     if len(icao) >= 2:
         prefix = icao[:2]
-        manual_map = {
-            'UK': 'UA', 'KJ': 'US', 'K': 'US', 'EG': 'GB', 'LF': 'FR', 'ED': 'DE', 
-            'LP': 'PT', 'LE': 'ES', 'LI': 'IT', 'U': 'RU'
-        }
+        manual_map = {'UK': 'UA', 'KJ': 'US', 'K': 'US', 'EG': 'GB', 'LF': 'FR', 'ED': 'DE', 'LP': 'PT', 'LE': 'ES', 'LI': 'IT', 'U': 'RU'}
         code = manual_map.get(prefix, "XX")
-        if code != "XX":
-            flag = get_flag(code)
+        if code != "XX": flag = get_flag(code)
 
     return f"{flag} **{icao}** ({clean_text(api_name)})"
 
@@ -154,29 +145,17 @@ def get_landing_data(f, details_type):
         g = round(random.uniform(0.9, 1.8), 2)
         return f"📉 **{fpm} fpm**, **{g} G**"
 
-    fpm = 0
-    g_force = 0.0
-    found = False
-
+    fpm, g_force, found = 0, 0.0, False
     if "result" in f and "violations" in f["result"]:
         for v in f["result"]["violations"]:
-            payload = v.get("entry", {}).get("payload", {})
-            td = payload.get("touchDown", {})
+            td = v.get("entry", {}).get("payload", {}).get("touchDown", {})
             if td:
-                if "rate" in td: 
-                    fpm = int(td["rate"])
-                    found = True
-                if "gForce" in td: 
-                    g_force = float(td["gForce"])
-                    found = True
+                fpm, g_force, found = int(td.get("rate", 0)), float(td.get("gForce", 0)), True
                 if found: break
 
     if not found and "landing" in f and f["landing"]:
         td = f["landing"]
-        if "rate" in td: fpm = int(td["rate"])
-        if "touchDownRate" in td: fpm = int(td["touchDownRate"])
-        if "gForce" in td: g_force = float(td["gForce"])
-        if fpm != 0 or g_force != 0: found = True
+        fpm, g_force, found = int(td.get("rate", 0)), float(td.get("gForce", 0)), True
 
     if not found:
         val = f.get("lastState", {}).get("speed", {}).get("touchDownRate")
@@ -185,9 +164,7 @@ def get_landing_data(f, details_type):
             found = True
 
     if found and fpm != 0:
-        fpm_val = -abs(fpm)
-        g_str = f", **{g_force} G**" if g_force > 0 else ""
-        return f"📉 **{fpm_val} fpm**{g_str}"
+        return f"📉 **-{abs(fpm)} fpm**, **{g_force} G**"
     
     return "📉 **N/A**"
 
@@ -209,13 +186,8 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     airline = f.get("airline", {}).get("icao", "")
     full_cs = f"{airline} {cs}" if airline else cs
     
-    dep_icao = f.get("dep", {}).get("icao", "????")
-    dep_api_name = f.get("dep", {}).get("name", "")
-    dep_str = format_airport_string(dep_icao, dep_api_name)
-    
-    arr_icao = f.get("arr", {}).get("icao", "????")
-    arr_api_name = f.get("arr", {}).get("name", "")
-    arr_str = format_airport_string(arr_icao, arr_api_name)
+    dep_str = format_airport_string(f.get("dep", {}).get("icao", ""), f.get("dep", {}).get("name", ""))
+    arr_str = format_airport_string(f.get("arr", {}).get("icao", ""), f.get("arr", {}).get("name", ""))
     
     ac = f.get("aircraft", {}).get("airframe", {}).get("name", "A/C")
     pilot = f.get("pilot", {}).get("fullname", "Pilot")
@@ -233,8 +205,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     cargo_kg = int(raw_cargo_units * 108)
 
     embed = None
-    
-    # 🔥 ВИКОРИСТОВУЄМО СПЕЦІАЛЬНИЙ ШИРОКИЙ ПРОБІЛ (EM SPACE) 🔥
     arrow = " \u2003➡️\u2003 "
 
     if status == "Departed":
@@ -267,10 +237,25 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         dist = t.get("distance", 0)
         ftime = t.get("time", 0)
         
+        # Financial & Rating Logic for Crash/Emergency
         raw_balance = int(t.get("balance", 0))
         formatted_balance = f"{raw_balance:,}".replace(",", ".")
-        
         rating = f.get("rating", 0.0)
+        
+        # --- CRASH / EMERGENCY DETECTION ---
+        # Default Green
+        title_text = f"😎 {full_cs} completed"
+        color_code = 0x2ecc71
+        
+        # 1. CRASH DETECTION (Penalty usually 1mln or rating 0 with huge negative balance)
+        if raw_balance <= -900000: 
+            title_text = f"💥 {full_cs} CRASHED"
+            color_code = 0x992d22 # Dark Red
+        # 2. EMERGENCY DETECTION (Balance is 0, but distance > 0)
+        elif raw_balance == 0 and dist > 1:
+            title_text = f"⚠️ {full_cs} EMERGENCY"
+            color_code = 0xe67e22 # Orange
+            
         landing_info = get_landing_data(f, details_type)
 
         desc = (
@@ -284,7 +269,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             f"💰 **{formatted_balance} $**\n\n"
             f"{get_rating_square(rating)} **{rating}**"
         )
-        embed = discord.Embed(title=f"😎 {full_cs} completed", url=flight_url, description=desc, color=0x2ecc71)
+        embed = discord.Embed(title=title_text, url=flight_url, description=desc, color=color_code)
 
     if embed:
         await channel.send(embed=embed)
@@ -293,31 +278,31 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 async def on_message(message):
     if message.author == client.user: return
     if message.content == "!test":
-        await message.channel.send("🛠️ **Test (Final Version: Wide Spaces)...**")
-        mock = {
-            "_id": "697f11b19da57b990acafff9",
-            "flightNumber": "TEST1", "airline": {"icao": "OSA"},
-            "dep": {"icao": "UKBB", "name": "Boryspil International Airport"}, # Kiev in DB -> Kyiv here
-            "arr": {"icao": "LPMA", "name": "Madeira Airport"}, # Funchal + Madeira in DB
-            "aircraft": {"airframe": {"name": "Boeing 737-800"}},
-            "pilot": {"fullname": "Test Pilot"},
-            "payload": {"pax": 100, "cargo": 40}, 
-            "delay": -12, "network": {"name": "VATSIM"},
-            "landing": {"rate": -185, "gForce": 1.34},
-            "result": {
-                "totals": {
-                    "distance": 350, "time": 55, 
-                    "balance": 12500,
-                    "payload": {"pax": 100, "cargo": 40}
-                }
-            },
-            "rating": 9.9
+        await message.channel.send("🛠️ **Test (Emergency/Crash Check)...**")
+        # 1. Normal Flight
+        mock_norm = {
+            "_id": "test_norm", "flightNumber": "TEST1", "airline": {"icao": "OSA"},
+            "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"},
+            "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"},
+            "payload": {"pax": 100, "cargo": 40}, "network": "VATSIM", "rating": 9.9,
+            "landing": {"rate": -150, "gForce": 1.1},
+            "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 100, "cargo": 40}}}
         }
-        await send_flight_message(message.channel, "Departed", mock, "test")
-        await asyncio.sleep(1)
-        await send_flight_message(message.channel, "Arrived", mock, "test")
-        await asyncio.sleep(1)
-        await send_flight_message(message.channel, "Completed", mock, "test")
+        await send_flight_message(message.channel, "Completed", mock_norm, "test")
+        
+        # 2. Emergency Flight (Balance 0)
+        mock_emerg = mock_norm.copy()
+        mock_emerg["_id"] = "test_emerg"
+        mock_emerg["result"] = {"totals": {"distance": 350, "time": 55, "balance": 0, "payload": {"pax": 100, "cargo": 40}}}
+        await send_flight_message(message.channel, "Completed", mock_emerg, "test")
+        
+        # 3. Crash Flight (Balance -1M)
+        mock_crash = mock_norm.copy()
+        mock_crash["_id"] = "test_crash"
+        mock_crash["landing"] = {"rate": -2500, "gForce": 4.5} # Hard landing
+        mock_crash["rating"] = 0.0
+        mock_crash["result"] = {"totals": {"distance": 350, "time": 55, "balance": -1000000, "payload": {"pax": 100, "cargo": 40}}}
+        await send_flight_message(message.channel, "Completed", mock_crash, "test")
 
 async def main_loop():
     await client.wait_until_ready()
@@ -325,7 +310,6 @@ async def main_loop():
     
     channel = client.get_channel(CHANNEL_ID)
     state = load_state()
-    
     first_run = True
 
     async with aiohttp.ClientSession() as session:
