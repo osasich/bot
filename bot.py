@@ -16,12 +16,16 @@ NEWSKY_API_KEY = os.getenv("NEWSKY_API_KEY")
 STATE_FILE = Path("sent.json")
 CHECK_INTERVAL = 30
 BASE_URL = "https://newsky.app/api/airline-api"
+AIRPORTS_DB_URL = "https://raw.githubusercontent.com/mwgg/Airports/master/airports.json"
 HEADERS = {"Authorization": f"Bearer {NEWSKY_API_KEY}"}
 
 logging.basicConfig(level=logging.INFO)
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
+
+# Глобальна змінна для бази аеропортів
+AIRPORTS_DB = {}
 
 # ---------- HELPERS ----------
 def load_state():
@@ -43,20 +47,46 @@ def clean_airport_name(name):
         name = name.replace(word, "")
     return name.strip()
 
+# --- 🌍 НОВА ЛОГІКА ПРАПОРІВ ---
+async def update_airports_db():
+    """Качає свіжу базу аеропортів з GitHub"""
+    global AIRPORTS_DB
+    print("🌍 Downloading airports database...")
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(AIRPORTS_DB_URL) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    # Перетворюємо базу, щоб ключем був ICAO код
+                    AIRPORTS_DB = {k: v["country"] for k, v in data.items() if "country" in v}
+                    print(f"✅ Airports DB loaded! ({len(AIRPORTS_DB)} airports)")
+                else:
+                    print("⚠️ Failed to load airports DB")
+        except Exception as e:
+            print(f"⚠️ Error loading DB: {e}")
+
 def get_flag(icao):
-    if not icao or len(icao) < 2: return "🏳️"
+    """Шукає країну по ICAO в скачаній базі і робить прапор"""
+    if not icao: return "🏳️"
     icao = icao.upper()
-    prefixes = {
-        'UK': 'UA', 'KJ': 'US', 'K': 'US', 'C': 'CA', 'Y': 'AU', 'Z': 'CN',
-        'EG': 'GB', 'LF': 'FR', 'ED': 'DE', 'ET': 'DE', 'LI': 'IT', 'LE': 'ES',
-        'EP': 'PL', 'LK': 'CZ', 'LH': 'HU', 'LO': 'AT', 'LS': 'CH', 'EB': 'BE',
-        'EH': 'NL', 'EK': 'DK', 'EN': 'NO', 'ES': 'SE', 'EF': 'FI', 'LT': 'TR',
-        'LG': 'GR', 'U': 'RU', 'UM': 'BY', 'UB': 'AZ', 'UG': 'GE', 'UD': 'AM',
-        'UA': 'KZ', 'O': 'SA', 'V': 'IN', 'W': 'ID', 'F': 'ZA', 'S': 'BR'
-    }
-    iso = prefixes.get(icao[:2]) or prefixes.get(icao[:1])
-    if not iso: return "🏳️"
-    return "".join([chr(ord(c) + 127397) for c in iso])
+    
+    country_code = "XX"
+    
+    # 1. Шукаємо точний збіг (UKKK -> UA)
+    if icao in AIRPORTS_DB:
+        country_code = AIRPORTS_DB[icao]
+    # 2. Якщо немає точного, пробуємо по префіксу (backup logic)
+    elif len(icao) >= 2:
+        # Стандартні префікси на випадок якщо аеропорту немає в базі
+        prefix = icao[:2]
+        manual_map = {'UK': 'UA', 'KJ': 'US', 'K': 'US', 'EG': 'GB', 'LF': 'FR', 'ED': 'DE'} # Мінімальний набір
+        country_code = manual_map.get(prefix, "XX")
+
+    if country_code == "XX" or len(country_code) != 2:
+        return "🏳️"
+
+    # Магія перетворення коду (UA) в емодзі (🇺🇦)
+    return "".join([chr(ord(c) + 127397) for c in country_code.upper()])
 
 def get_timing(delay):
     try:
@@ -153,8 +183,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     ac = f.get("aircraft", {}).get("airframe", {}).get("name", "A/C")
     pilot = f.get("pilot", {}).get("fullname", "Pilot")
     
-    # --- CARGO CALCULATION (Units -> KG) ---
-    # 1 Unit = 108 kg
+    # Cargo Calc
     raw_pax = 0
     raw_cargo_units = 0
 
@@ -165,7 +194,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         raw_pax = f.get("payload", {}).get("pax", 0)
         raw_cargo_units = f.get("payload", {}).get("cargo", 0)
     
-    # Conversion
     cargo_kg = int(raw_cargo_units * 108)
 
     embed = None
@@ -203,9 +231,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         dist = t.get("distance", 0)
         ftime = t.get("time", 0)
         
-        # --- MONEY FORMATTING ---
         raw_balance = int(t.get("balance", 0))
-        # Форматуємо як 2,953, потім замінюємо кому на крапку -> 2.953
         formatted_balance = f"{raw_balance:,}".replace(",", ".")
         
         rating = f.get("rating", 0.0)
@@ -232,21 +258,22 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 async def on_message(message):
     if message.author == client.user: return
     if message.content == "!test":
-        await message.channel.send("🛠️ **Test (Links + Cargo Unit Convert + Money Format)...**")
+        await message.channel.send("🛠️ **Test (Auto-Flags + Links + Cargo + Money)...**")
+        # Випадковий тест з реальним ICAO для перевірки прапора
         mock = {
             "_id": "697f11b19da57b990acafff9",
             "flightNumber": "TEST1", "airline": {"icao": "OSA"},
-            "dep": {"icao": "UKKK", "name": "Ihor Sikorsky Kyiv International Airport"},
-            "arr": {"icao": "UKBB", "name": "Boryspil International Airport"},
+            "dep": {"icao": "KJFK", "name": "John F. Kennedy International Airport"}, # USA
+            "arr": {"icao": "EGLL", "name": "Heathrow Airport"}, # UK
             "aircraft": {"airframe": {"name": "Boeing 737-800"}},
             "pilot": {"fullname": "Test Pilot"},
-            "payload": {"pax": 100, "cargo": 40}, # 40 Units * 108 = 4320 kg
+            "payload": {"pax": 100, "cargo": 40}, 
             "delay": -12, "network": {"name": "VATSIM"},
             "landing": {"rate": -185, "gForce": 1.34},
             "result": {
                 "totals": {
                     "distance": 350, "time": 55, 
-                    "balance": -257350, # Test large negative number (-257.350)
+                    "balance": 12500,
                     "payload": {"pax": 100, "cargo": 40}
                 }
             },
@@ -261,6 +288,10 @@ async def on_message(message):
 # ---------- MAIN LOOP ----------
 async def main_loop():
     await client.wait_until_ready()
+    
+    # ЗАВАНТАЖЕННЯ БАЗИ ПРИ СТАРТІ
+    await update_airports_db()
+    
     channel = client.get_channel(CHANNEL_ID)
     state = load_state()
 
