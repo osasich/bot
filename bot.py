@@ -16,7 +16,6 @@ NEWSKY_API_KEY = os.getenv("NEWSKY_API_KEY")
 STATE_FILE = Path("sent.json")
 CHECK_INTERVAL = 30
 BASE_URL = "https://newsky.app/api/airline-api"
-# Використовуємо надійну базу JSON
 AIRPORTS_DB_URL = "https://raw.githubusercontent.com/mwgg/Airports/master/airports.json"
 HEADERS = {"Authorization": f"Bearer {NEWSKY_API_KEY}"}
 
@@ -25,7 +24,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-# Глобальна змінна для бази аеропортів
+# Глобальна змінна для бази
 AIRPORTS_DB = {}
 
 # ---------- HELPERS ----------
@@ -41,23 +40,15 @@ def save_state(state):
     except: pass
 
 def clean_text(text):
-    """Чистить назву від зайвих слів (Case Insensitive)"""
     if not text: return ""
-    # Видаляємо дужки
     text = re.sub(r"\(.*?\)", "", text)
-    
-    # Список слів для видалення
     removals = ["International", "Regional", "Airport", "Aerodrome", "Air Base", "Intl"]
-    
-    # Видаляємо слова, ігноруючи регістр
     for word in removals:
         pattern = re.compile(re.escape(word), re.IGNORECASE)
         text = pattern.sub("", text)
-        
-    # Прибираємо зайві пробіли та коми
     return text.strip().strip(",").strip()
 
-# --- 🌍 ЗАВАНТАЖЕННЯ БАЗИ ---
+# --- 🌍 ЗАВАНТАЖЕННЯ БАЗИ (FIXED) ---
 async def update_airports_db():
     global AIRPORTS_DB
     print("🌍 Downloading airports database...")
@@ -65,9 +56,10 @@ async def update_airports_db():
         try:
             async with session.get(AIRPORTS_DB_URL) as resp:
                 if resp.status == 200:
-                    data = await resp.json()
+                    # 🔥 ГОЛОВНИЙ ФІКС: content_type=None змушує читати JSON навіть якщо GitHub каже що це текст
+                    data = await resp.json(content_type=None)
+                    
                     AIRPORTS_DB = {}
-                    # Перезберігаємо з ключами у Upper Case для надійності
                     for k, v in data.items():
                         AIRPORTS_DB[k.upper()] = {
                             "country": v.get("country", "XX"),
@@ -76,7 +68,7 @@ async def update_airports_db():
                         }
                     print(f"✅ Airports DB loaded! ({len(AIRPORTS_DB)} airports)")
                 else:
-                    print("⚠️ Failed to load airports DB")
+                    print(f"⚠️ Failed to load airports DB: Status {resp.status}")
         except Exception as e:
             print(f"⚠️ Error loading DB: {e}")
 
@@ -87,58 +79,56 @@ def get_flag(country_code):
     except:
         return "🏳️"
 
-# --- 🧠 РОЗУМНЕ ФОРМУВАННЯ НАЗВИ (SMART CITY LOGIC) ---
+# --- 🧠 РОЗУМНЕ ФОРМУВАННЯ НАЗВИ ---
 def format_airport_string(icao, api_name):
-    """
-    Формує: 🇺🇦 UKBB (Kyiv Boryspil) або 🇵🇹 LPMA (Funchal Madeira)
-    """
     icao = icao.upper()
-    flag = "🏳️"
-    display_text = clean_text(api_name) # Дефолтне значення
     
-    # Спробуємо знайти в базі
+    # 1. ШУКАЄМО В БАЗІ (ДИНАМІЧНО)
     db_data = AIRPORTS_DB.get(icao)
     
     if db_data:
         city = db_data.get("city", "") or ""
         name = db_data.get("name", "") or ""
         country = db_data.get("country", "XX")
-        flag = get_flag(country)
         
-        # --- FIX: KIEV -> KYIV ---
+        # --- KYIV FIX (Dynamically for any airport) ---
         if city.lower() == "kiev": city = "Kyiv"
-        name = name.replace("Kiev", "Kyiv") # Заміна в назві аеропорту теж
+        name = name.replace("Kiev", "Kyiv")
         
-        # Чистимо назву аеропорту від "Airport" тощо
         clean_name = clean_text(name)
         
-        # --- ГОЛОВНА ЛОГІКА ---
+        display_text = ""
+        
+        # --- ЛОГІКА ОБ'ЄДНАННЯ ---
         if city and clean_name:
-            # Перевірка: чи є назва міста всередині назви аеропорту?
-            # Наприклад: City="London", Name="London Heathrow" -> True
+            # Якщо назва вже містить місто (напр. "London Heathrow"), беремо тільки назву
             if city.lower() in clean_name.lower():
                 display_text = clean_name
             else:
-                # Наприклад: City="Funchal", Name="Madeira" -> False -> "Funchal Madeira"
+                # Інакше склеюємо: "Funchal Madeira"
                 display_text = f"{city} {clean_name}"
         elif clean_name:
             display_text = clean_name
         elif city:
             display_text = city
+        else:
+            display_text = clean_text(api_name)
 
-    else:
-        # Якщо в базі немає, пробуємо вгадати прапор по префіксу
-        if len(icao) >= 2:
-            prefix = icao[:2]
-            manual_map = {
-                'UK': 'UA', 'KJ': 'US', 'K': 'US', 'EG': 'GB', 'LF': 'FR', 'ED': 'DE', 
-                'LP': 'PT', 'LE': 'ES', 'LI': 'IT', 'U': 'RU' # Додав LP для Португалії про всяк випадок
-            }
-            code = manual_map.get(prefix, "XX")
-            if code != "XX":
-                flag = get_flag(code)
+        return f"{get_flag(country)} **{icao}** ({display_text})"
+    
+    # 2. FALLBACK (Якщо бази немає або аеропорту немає в базі)
+    flag = "🏳️"
+    if len(icao) >= 2:
+        prefix = icao[:2]
+        manual_map = {
+            'UK': 'UA', 'KJ': 'US', 'K': 'US', 'EG': 'GB', 'LF': 'FR', 'ED': 'DE', 
+            'LP': 'PT', 'LE': 'ES', 'LI': 'IT', 'U': 'RU'
+        }
+        code = manual_map.get(prefix, "XX")
+        if code != "XX":
+            flag = get_flag(code)
 
-    return f"{flag} **{icao}** ({display_text})"
+    return f"{flag} **{icao}** ({clean_text(api_name)})"
 
 def get_timing(delay):
     try:
@@ -172,7 +162,6 @@ def get_landing_data(f, details_type):
     g_force = 0.0
     found = False
 
-    # 1. Violations/Events
     if "result" in f and "violations" in f["result"]:
         for v in f["result"]["violations"]:
             payload = v.get("entry", {}).get("payload", {})
@@ -186,7 +175,6 @@ def get_landing_data(f, details_type):
                     found = True
                 if found: break
 
-    # 2. Landing Object
     if not found and "landing" in f and f["landing"]:
         td = f["landing"]
         if "rate" in td: fpm = int(td["rate"])
@@ -194,7 +182,6 @@ def get_landing_data(f, details_type):
         if "gForce" in td: g_force = float(td["gForce"])
         if fpm != 0 or g_force != 0: found = True
 
-    # 3. Fallback
     if not found:
         val = f.get("lastState", {}).get("speed", {}).get("touchDownRate")
         if val: 
@@ -216,7 +203,6 @@ async def fetch_api(session, path, method="GET", body=None):
 
 # ---------- MESSAGE GENERATOR ----------
 async def send_flight_message(channel, status, f, details_type="ongoing"):
-    # Links
     fid = f.get("_id") or f.get("id") or "test_id"
     if status == "Completed":
         flight_url = f"https://newsky.app/flight/{fid}"
@@ -227,7 +213,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     airline = f.get("airline", {}).get("icao", "")
     full_cs = f"{airline} {cs}" if airline else cs
     
-    # --- AIRPORT FORMATTING ---
     dep_icao = f.get("dep", {}).get("icao", "????")
     dep_api_name = f.get("dep", {}).get("name", "")
     dep_str = format_airport_string(dep_icao, dep_api_name)
@@ -239,7 +224,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     ac = f.get("aircraft", {}).get("airframe", {}).get("name", "A/C")
     pilot = f.get("pilot", {}).get("fullname", "Pilot")
     
-    # Cargo Calc
     raw_pax = 0
     raw_cargo_units = 0
 
@@ -254,7 +238,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 
     embed = None
 
-    # === 1. DEPARTED ===
     if status == "Departed":
         delay = f.get("delay", 0)
         desc = (
@@ -266,7 +249,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         )
         embed = discord.Embed(title=f"🛫 {full_cs} departed", url=flight_url, description=desc, color=0x3498db)
 
-    # === 2. ARRIVED ===
     elif status == "Arrived":
         delay = f.get("delay", 0)
         desc = (
@@ -278,7 +260,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         )
         embed = discord.Embed(title=f"🛬 {full_cs} arrived", url=flight_url, description=desc, color=0x3498db)
 
-    # === 3. COMPLETED ===
     elif status == "Completed":
         net_data = f.get("network")
         net = (net_data.get("name") if isinstance(net_data, dict) else str(net_data)) or "OFFLINE"
@@ -309,17 +290,16 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     if embed:
         await channel.send(embed=embed)
 
-# ---------- TEST COMMAND ----------
 @client.event
 async def on_message(message):
     if message.author == client.user: return
     if message.content == "!test":
-        await message.channel.send("🛠️ **Test (Kyiv+Boryspil / Funchal+Madeira)...**")
+        await message.channel.send("🛠️ **Test (Pure DB - Funchal Madeira & Kyiv)...**")
         mock = {
             "_id": "697f11b19da57b990acafff9",
             "flightNumber": "TEST1", "airline": {"icao": "OSA"},
-            "dep": {"icao": "UKBB", "name": "Boryspil International Airport"}, # Має бути Kyiv Boryspil
-            "arr": {"icao": "LPMA", "name": "Madeira Airport"}, # Має бути Funchal Madeira (PT flag)
+            "dep": {"icao": "UKBB", "name": "Boryspil International Airport"}, # Kiev -> Kyiv Boryspil
+            "arr": {"icao": "LPMA", "name": "Madeira Airport"}, # Funchal + Madeira
             "aircraft": {"airframe": {"name": "Boeing 737-800"}},
             "pilot": {"fullname": "Test Pilot"},
             "payload": {"pax": 100, "cargo": 40}, 
@@ -340,7 +320,6 @@ async def on_message(message):
         await asyncio.sleep(1)
         await send_flight_message(message.channel, "Completed", mock, "test")
 
-# ---------- MAIN LOOP ----------
 async def main_loop():
     await client.wait_until_ready()
     await update_airports_db()
@@ -351,7 +330,6 @@ async def main_loop():
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # 1. Active Flights
                 ongoing = await fetch_api(session, "/flights/ongoing")
                 if ongoing and "results" in ongoing:
                     print(f"📡 Tracking {len(ongoing['results'])} flights...", end='\r')
@@ -374,7 +352,6 @@ async def main_loop():
                             await send_flight_message(channel, "Arrived", f, "ongoing")
                             state[fid]["landing"] = True
 
-                # 2. Completed Flights
                 recent = await fetch_api(session, "/flights/recent", method="POST", body={"count": 5})
                 if recent and "results" in recent:
                     for raw_f in recent["results"]:
