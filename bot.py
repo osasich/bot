@@ -16,6 +16,7 @@ NEWSKY_API_KEY = os.getenv("NEWSKY_API_KEY")
 STATE_FILE = Path("sent.json")
 CHECK_INTERVAL = 30
 BASE_URL = "https://newsky.app/api/airline-api"
+# Використовуємо надійну базу JSON
 AIRPORTS_DB_URL = "https://raw.githubusercontent.com/mwgg/Airports/master/airports.json"
 HEADERS = {"Authorization": f"Bearer {NEWSKY_API_KEY}"}
 
@@ -40,15 +41,21 @@ def save_state(state):
     except: pass
 
 def clean_text(text):
-    """Чистить назву від зайвих слів"""
+    """Чистить назву від зайвих слів (Case Insensitive)"""
     if not text: return ""
-    text = re.sub(r"\(.*?\)", "", text) # Видаляє дужки
+    # Видаляємо дужки
+    text = re.sub(r"\(.*?\)", "", text)
+    
     # Список слів для видалення
-    removals = ["International", "Regional", "Airport", "Aerodrome", "Air Base", "Intl", "  "]
+    removals = ["International", "Regional", "Airport", "Aerodrome", "Air Base", "Intl"]
+    
+    # Видаляємо слова, ігноруючи регістр
     for word in removals:
-        # replace case insensitive strategy can be complex, doing simple clean here
-        text = text.replace(word, "")
-    return text.strip().strip(",")
+        pattern = re.compile(re.escape(word), re.IGNORECASE)
+        text = pattern.sub("", text)
+        
+    # Прибираємо зайві пробіли та коми
+    return text.strip().strip(",").strip()
 
 # --- 🌍 ЗАВАНТАЖЕННЯ БАЗИ ---
 async def update_airports_db():
@@ -60,8 +67,9 @@ async def update_airports_db():
                 if resp.status == 200:
                     data = await resp.json()
                     AIRPORTS_DB = {}
+                    # Перезберігаємо з ключами у Upper Case для надійності
                     for k, v in data.items():
-                        AIRPORTS_DB[k] = {
+                        AIRPORTS_DB[k.upper()] = {
                             "country": v.get("country", "XX"),
                             "city": v.get("city", ""),
                             "name": v.get("name", "")
@@ -74,61 +82,63 @@ async def update_airports_db():
 
 def get_flag(country_code):
     if not country_code or country_code == "XX": return "🏳️"
-    return "".join([chr(ord(c) + 127397) for c in country_code.upper()])
+    try:
+        return "".join([chr(ord(c) + 127397) for c in country_code.upper()])
+    except:
+        return "🏳️"
 
-# --- 🧠 РОЗУМНЕ ФОРМУВАННЯ НАЗВИ ---
+# --- 🧠 РОЗУМНЕ ФОРМУВАННЯ НАЗВИ (SMART CITY LOGIC) ---
 def format_airport_string(icao, api_name):
     """
-    Формує: 🇺🇦 UKBB (Kyiv Boryspil)
-    Логіка: City + Name (якщо Name не містить City).
-    Fix: Kiev -> Kyiv.
+    Формує: 🇺🇦 UKBB (Kyiv Boryspil) або 🇵🇹 LPMA (Funchal Madeira)
     """
     icao = icao.upper()
+    flag = "🏳️"
+    display_text = clean_text(api_name) # Дефолтне значення
     
-    # 1. Дані з бази
+    # Спробуємо знайти в базі
     db_data = AIRPORTS_DB.get(icao)
     
     if db_data:
         city = db_data.get("city", "") or ""
         name = db_data.get("name", "") or ""
         country = db_data.get("country", "XX")
+        flag = get_flag(country)
         
         # --- FIX: KIEV -> KYIV ---
-        if city == "Kiev": city = "Kyiv"
-        name = name.replace("Kiev", "Kyiv")
+        if city.lower() == "kiev": city = "Kyiv"
+        name = name.replace("Kiev", "Kyiv") # Заміна в назві аеропорту теж
         
-        # Чистимо назву від "Airport", "International"
+        # Чистимо назву аеропорту від "Airport" тощо
         clean_name = clean_text(name)
         
-        display_text = ""
-        
-        # --- ЛОГІКА ОБ'ЄДНАННЯ ---
+        # --- ГОЛОВНА ЛОГІКА ---
         if city and clean_name:
-            # Якщо назва вже містить місто (напр. "London Heathrow"), то не дублюємо місто
+            # Перевірка: чи є назва міста всередині назви аеропорту?
+            # Наприклад: City="London", Name="London Heathrow" -> True
             if city.lower() in clean_name.lower():
                 display_text = clean_name
             else:
-                # Інакше склеюємо: "Funchal Madeira"
+                # Наприклад: City="Funchal", Name="Madeira" -> False -> "Funchal Madeira"
                 display_text = f"{city} {clean_name}"
         elif clean_name:
             display_text = clean_name
         elif city:
             display_text = city
-        else:
-            display_text = clean_text(api_name) # Fallback
 
-        return f"{get_flag(country)} **{icao}** ({display_text})"
-    
-    # Якщо немає в базі - Fallback
-    flag = "🏳️"
-    if len(icao) >= 2:
-        prefix = icao[:2]
-        # Простий мапінг для backup прапорів
-        manual_map = {'UK': 'UA', 'KJ': 'US', 'K': 'US', 'EG': 'GB', 'LF': 'FR', 'ED': 'DE'}
-        code = manual_map.get(prefix, "XX")
-        flag = get_flag(code)
-        
-    return f"{flag} **{icao}** ({clean_text(api_name)})"
+    else:
+        # Якщо в базі немає, пробуємо вгадати прапор по префіксу
+        if len(icao) >= 2:
+            prefix = icao[:2]
+            manual_map = {
+                'UK': 'UA', 'KJ': 'US', 'K': 'US', 'EG': 'GB', 'LF': 'FR', 'ED': 'DE', 
+                'LP': 'PT', 'LE': 'ES', 'LI': 'IT', 'U': 'RU' # Додав LP для Португалії про всяк випадок
+            }
+            code = manual_map.get(prefix, "XX")
+            if code != "XX":
+                flag = get_flag(code)
+
+    return f"{flag} **{icao}** ({display_text})"
 
 def get_timing(delay):
     try:
@@ -304,12 +314,12 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 async def on_message(message):
     if message.author == client.user: return
     if message.content == "!test":
-        await message.channel.send("🛠️ **Test (Kyiv Fix + City Names)...**")
+        await message.channel.send("🛠️ **Test (Kyiv+Boryspil / Funchal+Madeira)...**")
         mock = {
             "_id": "697f11b19da57b990acafff9",
             "flightNumber": "TEST1", "airline": {"icao": "OSA"},
-            "dep": {"icao": "UKBB", "name": "Boryspil International Airport"}, # Test Kyiv Fix
-            "arr": {"icao": "LPMA", "name": "Madeira Airport"}, # Test Funchal Madeira
+            "dep": {"icao": "UKBB", "name": "Boryspil International Airport"}, # Має бути Kyiv Boryspil
+            "arr": {"icao": "LPMA", "name": "Madeira Airport"}, # Має бути Funchal Madeira (PT flag)
             "aircraft": {"airframe": {"name": "Boeing 737-800"}},
             "pilot": {"fullname": "Test Pilot"},
             "payload": {"pax": 100, "cargo": 40}, 
@@ -333,7 +343,6 @@ async def on_message(message):
 # ---------- MAIN LOOP ----------
 async def main_loop():
     await client.wait_until_ready()
-    # LOAD AIRPORTS DB
     await update_airports_db()
     
     channel = client.get_channel(CHANNEL_ID)
