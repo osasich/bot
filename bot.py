@@ -283,7 +283,7 @@ async def on_message(message):
             "**`!help`** — list of commands\n"
             "**`!status`** — сheck system status\n"
             "**`!test`** — run all scenarios\n"
-            "**`!test <minutes>`** — run custom delay test (e.g. `!test -20`)\n"
+            "**`!test min`** — run custom delay test\n"
             "**`!spy ID`** — dump raw flight JSON data\n"
         )
         embed.description = commands_list
@@ -441,3 +441,4 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
+
