@@ -39,17 +39,19 @@ def save_state(state):
         STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
     except: pass
 
-def clean_airport_name(name):
-    if not name: return ""
-    name = re.sub(r"\(.*?\)", "", name)
+def clean_text(text):
+    """Чистить назву від зайвих слів"""
+    if not text: return ""
+    text = re.sub(r"\(.*?\)", "", text) # Видаляє дужки
+    # Список слів для видалення (Case sensitive strategy via replace)
     removals = ["International", "Regional", "Airport", "Aerodrome", "Air Base", "Intl", "  "]
     for word in removals:
-        name = name.replace(word, "")
-    return name.strip()
+        text = text.replace(word, "")
+    return text.strip().strip(",")
 
-# --- 🌍 НОВА ЛОГІКА ПРАПОРІВ ---
+# --- 🌍 ОНОВЛЕНА ЛОГІКА БАЗИ ДАНИХ ---
 async def update_airports_db():
-    """Качає свіжу базу аеропортів з GitHub"""
+    """Качає базу: ICAO -> {Country, City, Name}"""
     global AIRPORTS_DB
     print("🌍 Downloading airports database...")
     async with aiohttp.ClientSession() as session:
@@ -57,8 +59,14 @@ async def update_airports_db():
             async with session.get(AIRPORTS_DB_URL) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    # Перетворюємо базу, щоб ключем був ICAO код
-                    AIRPORTS_DB = {k: v["country"] for k, v in data.items() if "country" in v}
+                    # Зберігаємо більше даних: країну, місто, назву
+                    AIRPORTS_DB = {}
+                    for k, v in data.items():
+                        AIRPORTS_DB[k] = {
+                            "country": v.get("country", "XX"),
+                            "city": v.get("city", ""),
+                            "name": v.get("name", "")
+                        }
                     print(f"✅ Airports DB loaded! ({len(AIRPORTS_DB)} airports)")
                 else:
                     print("⚠️ Failed to load airports DB")
@@ -66,27 +74,59 @@ async def update_airports_db():
             print(f"⚠️ Error loading DB: {e}")
 
 def get_flag(icao):
-    """Шукає країну по ICAO в скачаній базі і робить прапор"""
+    """Шукає країну по ICAO і робить прапор"""
     if not icao: return "🏳️"
     icao = icao.upper()
-    
     country_code = "XX"
     
-    # 1. Шукаємо точний збіг (UKKK -> UA)
+    # 1. Шукаємо в базі
     if icao in AIRPORTS_DB:
-        country_code = AIRPORTS_DB[icao]
-    # 2. Якщо немає точного, пробуємо по префіксу (backup logic)
+        country_code = AIRPORTS_DB[icao].get("country", "XX")
+    # 2. Backup по префіксу
     elif len(icao) >= 2:
-        # Стандартні префікси на випадок якщо аеропорту немає в базі
         prefix = icao[:2]
-        manual_map = {'UK': 'UA', 'KJ': 'US', 'K': 'US', 'EG': 'GB', 'LF': 'FR', 'ED': 'DE'} # Мінімальний набір
+        manual_map = {'UK': 'UA', 'KJ': 'US', 'K': 'US', 'EG': 'GB', 'LF': 'FR', 'ED': 'DE'}
         country_code = manual_map.get(prefix, "XX")
 
     if country_code == "XX" or len(country_code) != 2:
         return "🏳️"
 
-    # Магія перетворення коду (UA) в емодзі (🇺🇦)
     return "".join([chr(ord(c) + 127397) for c in country_code.upper()])
+
+def format_airport_string(icao, api_name):
+    """
+    Формує рядок: 🇺🇦 UKKK (Kyiv, Zhuliany)
+    Бере дані з бази. Якщо немає в базі - бере з API.
+    """
+    flag = get_flag(icao)
+    icao = icao.upper()
+    
+    db_data = AIRPORTS_DB.get(icao)
+    
+    if db_data:
+        city = db_data.get("city", "")
+        name = clean_text(db_data.get("name", ""))
+        
+        # Якщо є і місто і назва
+        if city and name:
+            # Іноді назва вже містить місто (London Heathrow), тоді не дублюємо
+            if city.lower() in name.lower():
+                display_text = f"{city}, {name.replace(city, '').strip()}"
+            else:
+                display_text = f"{city}, {name}"
+        elif name:
+            display_text = name
+        elif city:
+            display_text = city
+        else:
+            display_text = clean_text(api_name) # Fallback
+            
+        # Фінальна зачистка ком і пробілів
+        display_text = display_text.strip(" ,")
+        return f"{flag} **{icao}** ({display_text})"
+    
+    # Якщо аеропорту немає в базі Інтернету - беремо назву з Newsky
+    return f"{flag} **{icao}** ({clean_text(api_name)})"
 
 def get_timing(delay):
     try:
@@ -164,7 +204,7 @@ async def fetch_api(session, path, method="GET", body=None):
 
 # ---------- MESSAGE GENERATOR ----------
 async def send_flight_message(channel, status, f, details_type="ongoing"):
-    # Links setup
+    # Links
     fid = f.get("_id") or f.get("id") or "test_id"
     if status == "Completed":
         flight_url = f"https://newsky.app/flight/{fid}"
@@ -175,10 +215,14 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     airline = f.get("airline", {}).get("icao", "")
     full_cs = f"{airline} {cs}" if airline else cs
     
+    # --- AIRPORT FORMATTING (NEW) ---
     dep_icao = f.get("dep", {}).get("icao", "????")
-    dep_name = clean_airport_name(f.get("dep", {}).get("name"))
+    dep_api_name = f.get("dep", {}).get("name", "")
+    dep_str = format_airport_string(dep_icao, dep_api_name)
+    
     arr_icao = f.get("arr", {}).get("icao", "????")
-    arr_name = clean_airport_name(f.get("arr", {}).get("name"))
+    arr_api_name = f.get("arr", {}).get("name", "")
+    arr_str = format_airport_string(arr_icao, arr_api_name)
     
     ac = f.get("aircraft", {}).get("airframe", {}).get("name", "A/C")
     pilot = f.get("pilot", {}).get("fullname", "Pilot")
@@ -202,7 +246,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     if status == "Departed":
         delay = f.get("delay", 0)
         desc = (
-            f"{get_flag(dep_icao)} **{dep_icao}** ({dep_name}) ➡️ {get_flag(arr_icao)} **{arr_icao}** ({arr_name})\n\n"
+            f"{dep_str} ➡️ {arr_str}\n\n"
             f"✈️ **{ac}**\n\n"
             f"{get_timing(delay)}\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
@@ -214,7 +258,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     elif status == "Arrived":
         delay = f.get("delay", 0)
         desc = (
-            f"{get_flag(dep_icao)} **{dep_icao}** ({dep_name}) ➡️ {get_flag(arr_icao)} **{arr_icao}** ({arr_name})\n\n"
+            f"{dep_str} ➡️ {arr_str}\n\n"
             f"✈️ **{ac}**\n\n"
             f"{get_timing(delay)}\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
@@ -238,7 +282,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         landing_info = get_landing_data(f, details_type)
 
         desc = (
-            f"{get_flag(dep_icao)} **{dep_icao}** ({dep_name}) ➡️ {get_flag(arr_icao)} **{arr_icao}** ({arr_name})\n\n"
+            f"{dep_str} ➡️ {arr_str}\n\n"
             f"✈️ **{ac}**\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
             f"🌐 **{net.upper()}**\n\n"
@@ -258,13 +302,12 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 async def on_message(message):
     if message.author == client.user: return
     if message.content == "!test":
-        await message.channel.send("🛠️ **Test (Auto-Flags + Links + Cargo + Money)...**")
-        # Випадковий тест з реальним ICAO для перевірки прапора
+        await message.channel.send("🛠️ **Test (Cities + Names)...**")
         mock = {
             "_id": "697f11b19da57b990acafff9",
             "flightNumber": "TEST1", "airline": {"icao": "OSA"},
-            "dep": {"icao": "KJFK", "name": "John F. Kennedy International Airport"}, # USA
-            "arr": {"icao": "EGLL", "name": "Heathrow Airport"}, # UK
+            "dep": {"icao": "KJFK", "name": "John F. Kennedy International Airport"}, 
+            "arr": {"icao": "EGLL", "name": "Heathrow Airport"}, 
             "aircraft": {"airframe": {"name": "Boeing 737-800"}},
             "pilot": {"fullname": "Test Pilot"},
             "payload": {"pax": 100, "cargo": 40}, 
@@ -288,8 +331,7 @@ async def on_message(message):
 # ---------- MAIN LOOP ----------
 async def main_loop():
     await client.wait_until_ready()
-    
-    # ЗАВАНТАЖЕННЯ БАЗИ ПРИ СТАРТІ
+    # LOAD AIRPORTS DB
     await update_airports_db()
     
     channel = client.get_channel(CHANNEL_ID)
