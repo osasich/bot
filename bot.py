@@ -233,11 +233,14 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     cargo_kg = int(raw_cargo_units * 108)
 
     embed = None
+    
+    # 🔥 ВИКОРИСТОВУЄМО СПЕЦІАЛЬНИЙ ШИРОКИЙ ПРОБІЛ (EM SPACE) 🔥
+    arrow = " \u2003➡️\u2003 "
 
     if status == "Departed":
         delay = f.get("delay", 0)
         desc = (
-            f"{dep_str}  ➡️  {arr_str}\n\n"
+            f"{dep_str}{arrow}{arr_str}\n\n"
             f"✈️ **{ac}**\n\n"
             f"{get_timing(delay)}\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
@@ -248,7 +251,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     elif status == "Arrived":
         delay = f.get("delay", 0)
         desc = (
-            f"{dep_str}  ➡️  {arr_str}\n\n"
+            f"{dep_str}{arrow}{arr_str}\n\n"
             f"✈️ **{ac}**\n\n"
             f"{get_timing(delay)}\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
@@ -271,7 +274,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         landing_info = get_landing_data(f, details_type)
 
         desc = (
-            f"{dep_str}  ➡️  {arr_str}\n\n"
+            f"{dep_str}{arrow}{arr_str}\n\n"
             f"✈️ **{ac}**\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
             f"🌐 **{net.upper()}**\n\n"
@@ -290,7 +293,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 async def on_message(message):
     if message.author == client.user: return
     if message.content == "!test":
-        await message.channel.send("🛠️ **Test (DB Only + Auto-Kyiv Fix)...**")
+        await message.channel.send("🛠️ **Test (Final Version: Wide Spaces)...**")
         mock = {
             "_id": "697f11b19da57b990acafff9",
             "flightNumber": "TEST1", "airline": {"icao": "OSA"},
