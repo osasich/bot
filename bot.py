@@ -237,18 +237,19 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         
         title_text = f"😎 {full_cs} completed"
         color_code = 0x2ecc71
-
-        # 👇 ЛОГІКА EMEG/CRASH 👇
-        rating_str = f"{get_rating_square(rating)} **{rating}**"
         
+        # LOGIC FOR EMEG/CRASH/RATING
+        rating_str = f"{get_rating_square(rating)} **{rating}**"
+
         if raw_balance <= -900000: 
             title_text = f"💥 {full_cs} CRASHED"
             color_code = 0x992d22 
-            rating_str = "💀 **CRASH**" # Замінюємо рейтинг
+            rating_str = "💀 **CRASH**"
+        
         elif f.get("emergency") is True or (raw_balance == 0 and dist > 1):
             title_text = f"⚠️ {full_cs} EMERGENCY"
             color_code = 0xe67e22 
-            rating_str = "🟥 **EMEG**" # Замінюємо рейтинг
+            rating_str = "🟥 **EMEG**"
             
         landing_info = get_landing_data(f, details_type)
 
@@ -278,14 +279,13 @@ async def on_message(message):
     # 📚 HELP COMMAND (SIMPLE LIST)
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
-        
         commands_list = (
             "**`!help`** — list of commands\n"
             "**`!status`** — сheck system status\n"
-            "**`!test`** — run test scenarios\n"
+            "**`!test`** — run all scenarios\n"
+            "**`!test <minutes>`** — run custom delay test (e.g. `!test -20`)\n"
             "**`!spy ID`** — dump raw flight JSON data\n"
         )
-        
         embed.description = commands_list
         await message.channel.send(embed=embed)
         return
@@ -326,19 +326,50 @@ async def on_message(message):
         except Exception as e: await message.channel.send(f"Error: {e}")
         return
 
-    # 🛠️ TEST COMMAND
-    if message.content == "!test":
+    # 🛠️ TEST COMMAND (CUSTOM + ALL)
+    if message.content.startswith("!test"):
         if not is_admin:
             return await message.channel.send("🚫 **Access Denied:** Administrator rights required.")
 
-        await message.channel.send("🛠️ **Test (Emergency/Crash Check)...**")
-        mock_norm = {"_id": "test_norm", "flightNumber": "TEST1", "airline": {"icao": "OSA"}, "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"}, "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"}, "payload": {"pax": 100, "cargo": 40}, "network": "VATSIM", "rating": 9.9, "landing": {"rate": -150, "gForce": 1.1}, "delay": -20, "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 100, "cargo": 40}}}}
+        parts = message.content.split()
+        
+        # ВАРІАНТ 1: Користувацька затримка (!test -15, !test 40)
+        if len(parts) == 2:
+            try:
+                custom_delay = int(parts[1])
+                await message.channel.send(f"🛠️ **Custom Test (Delay: {custom_delay} min)...**")
+                
+                mock_custom = {
+                    "_id": "test_custom", "flightNumber": "TEST1", "airline": {"icao": "OSA"},
+                    "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"},
+                    "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"},
+                    "payload": {"pax": 140, "cargo": 35}, "network": "VATSIM", "rating": 9.9,
+                    "landing": {"rate": -120, "gForce": 1.05},
+                    "delay": custom_delay, # <--- Сюди ставимо твою цифру
+                    "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 140, "cargo": 35}}}
+                }
+                await send_flight_message(message.channel, "Completed", mock_custom, "test")
+                return
+            except ValueError:
+                pass # Якщо ввели не число, йдемо до звичайного тесту
+
+        # ВАРІАНТ 2: Повний набір тестів (!test)
+        await message.channel.send("🛠️ **Running Full Test Suite...**")
+        
+        # 1. DEPARTED
+        mock_dep = {"_id": "test_dep", "flightNumber": "TEST1", "airline": {"icao": "OSA"}, "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"}, "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"}, "payload": {"pax": 145, "cargo": 35}, "delay": 2}
+        await send_flight_message(message.channel, "Departed", mock_dep, "test")
+
+        # 2. NORMAL
+        mock_norm = {"_id": "test_norm", "flightNumber": "TEST1", "airline": {"icao": "OSA"}, "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"}, "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"}, "payload": {"pax": 100, "cargo": 40}, "network": "VATSIM", "rating": 9.9, "landing": {"rate": -150, "gForce": 1.1}, "delay": -10, "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 100, "cargo": 40}}}}
         await send_flight_message(message.channel, "Completed", mock_norm, "test")
         
+        # 3. EMERGENCY
         mock_emerg = mock_norm.copy()
         mock_emerg["_id"] = "test_emerg"; mock_emerg["emergency"] = True; mock_emerg["delay"] = 45; mock_emerg["result"] = {"totals": {"distance": 350, "time": 55, "balance": 0, "payload": {"pax": 100, "cargo": 40}}}
         await send_flight_message(message.channel, "Completed", mock_emerg, "test")
         
+        # 4. CRASH
         mock_crash = mock_norm.copy()
         mock_crash["_id"] = "test_crash"; mock_crash["landing"] = {"rate": -2500, "gForce": 4.5}; mock_crash["rating"] = 0.0; mock_crash["delay"] = 0; mock_crash["result"] = {"totals": {"distance": 350, "time": 55, "balance": -1150000, "payload": {"pax": 100, "cargo": 40}}}
         await send_flight_message(message.channel, "Completed", mock_crash, "test")
