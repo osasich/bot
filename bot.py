@@ -9,7 +9,7 @@ import random
 import io
 from pathlib import Path
 from itertools import cycle
-from datetime import datetime, timezone # <--- Потрібно для часу
+from datetime import datetime, timezone
 
 # ---------- НАЛАШТУВАННЯ ----------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -247,12 +247,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     cargo_multiplier = 139 
     cargo_kg = int(raw_cargo_units * cargo_multiplier)
 
-    # --- 🔥 ВИЗНАЧЕННЯ ТИПУ РЕЙСУ (Schedule/Free) 🔥 ---
-    flight_mode_text = "🎲 **Free Flight**"
-    if "schedule" in f and f["schedule"]:
-        flight_mode_text = "📅 **Scheduled**"
-
-    # --- Формування рядка вантажу ---
     if flight_type == "cargo":
         payload_str = f"📦 **{cargo_kg}** kg"
     else:
@@ -265,8 +259,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         delay = f.get("delay", 0)
         desc = (
             f"{dep_str}{arrow}{arr_str}\n\n"
-            f"✈️ **{ac}**\n"
-            f"{flight_mode_text}\n\n" # <--- Тимчасовий текст (поки не вставиш емодзі)
+            f"✈️ **{ac}**\n\n"
             f"{get_timing(delay)}\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
             f"{payload_str}"
@@ -303,7 +296,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         color_code = 0x2ecc71
         rating_str = f"{get_rating_square(rating)} **{rating}**"
 
-        # 🔥 Перевірка на краш (3G або 2000fpm) має пріоритет над Emergency 🔥
         is_hard_crash = abs(check_g) > 3.0 or abs(check_fpm) > 2000
         
         if raw_balance <= -900000 or is_hard_crash: 
@@ -319,8 +311,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 
         desc = (
             f"{dep_str}{arrow}{arr_str}\n\n"
-            f"✈️ **{ac}**\n"
-            f"{flight_mode_text}\n\n" # <--- Тимчасовий текст
+            f"✈️ **{ac}**\n\n"
             f"{get_timing(delay)}\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
             f"🌐 **{net.upper()}**\n\n"
@@ -359,44 +350,37 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
 
-    # 👇👇👇 НОВА КОМАНДА ДЛЯ ЕМОДЗІ (Для отримання коду) 👇👇👇
+    # 👇👇👇 ВИПРАВЛЕНА КОМАНДА !EMOJI (ОТРИМАТИ КОД) 👇👇👇
     if message.content.startswith("!emoji"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         parts = message.content.split()
         if len(parts) < 2: return await message.channel.send("⚠️ Usage: `!emoji <name>`")
         
         target_name = parts[1]
-        emoji = discord.utils.get(message.guild.emojis, name=target_name)
+        
+        # Шукаємо в налаштуваннях БОТА (Global), а не сервера
+        emoji = discord.utils.get(client.emojis, name=target_name)
+        
         if emoji:
-            await message.channel.send(f"Emoji: {emoji}\nCode: `{emoji}`")
+            await message.channel.send(f"Знайшов! Ось код:\n`{emoji}`")
         else:
-            await message.channel.send(f"❌ Not found: **{target_name}**")
+            await message.channel.send(f"❌ Не знайшов емодзі **{target_name}** в налаштуваннях бота.")
         return
 
-    # 👇👇👇 НОВА КОМАНДА ДЛЯ ВИДАЛЕННЯ (ПРИХОВАНА) 👇👇👇
-    if message.content.startswith("!del"):
-        if not is_admin: return 
-        try:
-            parts = message.content.split()
-            if len(parts) < 2: return 
-            
-            msg_id = int(parts[1])
-            msg_to_del = await message.channel.fetch_message(msg_id)
-            await msg_to_del.delete()
-            
-            # Видаляємо команду адміна теж
-            try: await message.delete()
-            except: pass
-            
-            await message.channel.send(f"🗑️ Deleted **{msg_id}**", delete_after=3)
-        except Exception as e:
-            await message.channel.send(f"❌ Error: {e}", delete_after=5)
+    # 👇👇👇 НОВА КОМАНДА ДЛЯ ТЕСТУ (ПЕРЕВІРИТИ, ЯК ВИГЛЯДАЄ) 👇👇👇
+    if message.content.startswith("!testemoji"):
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+        parts = message.content.split()
+        if len(parts) < 2: return await message.channel.send("⚠️ Встав код! Приклад: `!testemoji <:my_code:123456>`")
+        
+        code = parts[1]
+        await message.channel.send(f"Ось твій смайлик: {code}")
         return
 
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
-        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!emoji <name>`** — Get emoji ID\n\n"
+        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!emoji <name>`** — Get emoji code\n**`!testemoji <code>`** — Test display\n\n"
         desc += "**🎭 Status Management (Admin):**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Save & Add status\n**`!delstatus [num]`** — Delete status\n"
         embed.description = desc
         await message.channel.send(embed=embed)
