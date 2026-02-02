@@ -216,7 +216,6 @@ async def fetch_api(session, path, method="GET", body=None):
     except: return None
 
 # ---------- MESSAGE GENERATOR ----------
-# override_emoji - це параметр для примусового тесту емодзі
 async def send_flight_message(channel, status, f, details_type="ongoing", override_emoji=None):
     fid = f.get("_id") or f.get("id") or "test_id"
     if status == "Completed":
@@ -252,10 +251,8 @@ async def send_flight_message(channel, status, f, details_type="ongoing", overri
     
     # --- 🔥 ЛОГІКА ЕМОДЗІ (ПРОСТА) 🔥 ---
     if override_emoji:
-        # Якщо це тест команди !emoji1 або !emoji2 - використовуємо те, що передали
         status_emoji = override_emoji
     else:
-        # Сюди можна буде вписати дефолтні значення, якщо захочеш
         status_emoji = "" 
 
     cargo_multiplier = 139 
@@ -340,7 +337,8 @@ async def send_flight_message(channel, status, f, details_type="ongoing", overri
         embed = discord.Embed(title=title_text, url=flight_url, description=desc, color=color_code)
 
     if embed:
-        await channel.send(embed=embed)
+        # 🔥 ПОВЕРТАЄМО ПОВІДОМЛЕННЯ ДЛЯ ВИДАЛЕННЯ 🔥
+        return await channel.send(embed=embed) 
 
 async def change_status():
     current_status = next(status_cycle)
@@ -366,53 +364,74 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
 
-    # 👇👇👇 ТЕСТ 1: Емодзі :schedule: 👇👇👇
+    # 👇👇👇 ТЕСТ 1: Емодзі :schedule: (АВТОВИДАЛЕННЯ) 👇👇👇
     if message.content == "!emoji1":
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         
-        # Щоб зробити смайл "живим", заміни ":schedule:" на "<:schedule:ТВІЙ_ID_ЦИФРАМИ>"
-        TEST_EMOJI = ":schedule:" 
+        TEST_EMOJI = ":schedule:"
+        msgs_to_delete = [] # Сюди збираємо повідомлення
         
-        await message.channel.send(f"🧪 **Test Mode 1: {TEST_EMOJI}**")
+        # Відправляємо і запам'ятовуємо
+        m_intro = await message.channel.send(f"🧪 **Test Mode 1: {TEST_EMOJI}** (Autodelete in 5s)")
+        msgs_to_delete.append(m_intro)
         
-        # 1. DEPARTED
         mock_dep = {"_id": "test_dep", "flightNumber": "TEST1", "airline": {"icao": "UKR"}, "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"}, "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"}, "payload": {"pax": 145, "cargo": 35}, "delay": 2}
-        await send_flight_message(message.channel, "Departed", mock_dep, "test", override_emoji=TEST_EMOJI)
+        m1 = await send_flight_message(message.channel, "Departed", mock_dep, "test", override_emoji=TEST_EMOJI)
+        if m1: msgs_to_delete.append(m1)
         
-        # 2. COMPLETED (Normal)
         mock_norm = {"_id": "test_norm", "flightNumber": "TEST1", "airline": {"icao": "UKR"}, "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"}, "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"}, "payload": {"pax": 100, "cargo": 40}, "network": "VATSIM", "rating": 9.9, "landing": {"rate": -150, "gForce": 1.1}, "delay": -10, "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 100, "cargo": 40}}}}
-        await send_flight_message(message.channel, "Completed", mock_norm, "test", override_emoji=TEST_EMOJI)
+        m2 = await send_flight_message(message.channel, "Completed", mock_norm, "test", override_emoji=TEST_EMOJI)
+        if m2: msgs_to_delete.append(m2)
         
-        # 3. EMERGENCY
         mock_emerg = mock_norm.copy(); mock_emerg["_id"] = "test_emerg"; mock_emerg["emergency"] = True; mock_emerg["delay"] = 45; mock_emerg["result"] = {"totals": {"distance": 350, "time": 55, "balance": 0, "payload": {"pax": 100, "cargo": 40}}}
-        await send_flight_message(message.channel, "Completed", mock_emerg, "test", override_emoji=TEST_EMOJI)
+        m3 = await send_flight_message(message.channel, "Completed", mock_emerg, "test", override_emoji=TEST_EMOJI)
+        if m3: msgs_to_delete.append(m3)
         
-        # 4. CRASH
         mock_crash = mock_norm.copy(); mock_crash["_id"] = "test_crash"; mock_crash["landing"] = {"rate": -2500, "gForce": 4.5}; mock_crash["rating"] = 0.0; mock_crash["delay"] = 0; mock_crash["result"] = {"totals": {"distance": 350, "time": 55, "balance": -1150000, "payload": {"pax": 100, "cargo": 40}}}
-        await send_flight_message(message.channel, "Completed", mock_crash, "test", override_emoji=TEST_EMOJI)
+        m4 = await send_flight_message(message.channel, "Completed", mock_crash, "test", override_emoji=TEST_EMOJI)
+        if m4: msgs_to_delete.append(m4)
+
+        # Чекаємо і видаляємо
+        await asyncio.sleep(5)
+        for m in msgs_to_delete:
+            try: await m.delete()
+            except: pass
+        try: await message.delete() # Видаляємо команду користувача
+        except: pass
         return
 
-    # 👇👇👇 ТЕСТ 2: Емодзі :free: 👇👇👇
+    # 👇👇👇 ТЕСТ 2: Емодзі :free: (АВТОВИДАЛЕННЯ) 👇👇👇
     if message.content == "!emoji2":
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         
-        # Щоб зробити смайл "живим", заміни ":free:" на "<:free:ТВІЙ_ID_ЦИФРАМИ>"
         TEST_EMOJI = ":free:"
+        msgs_to_delete = []
         
-        await message.channel.send(f"🧪 **Test Mode 2: {TEST_EMOJI}**")
+        m_intro = await message.channel.send(f"🧪 **Test Mode 2: {TEST_EMOJI}** (Autodelete in 5s)")
+        msgs_to_delete.append(m_intro)
         
         mock_dep = {"_id": "test_dep_2", "flightNumber": "TEST2", "airline": {"icao": "WZZ"}, "dep": {"icao": "EDDM", "name": "Munich"}, "arr": {"icao": "EGLL", "name": "Heathrow"}, "aircraft": {"airframe": {"name": "A320"}}, "pilot": {"fullname": "Capt. Free"}, "payload": {"pax": 180, "cargo": 10}, "delay": 5}
-        await send_flight_message(message.channel, "Departed", mock_dep, "test", override_emoji=TEST_EMOJI)
+        m1 = await send_flight_message(message.channel, "Departed", mock_dep, "test", override_emoji=TEST_EMOJI)
+        if m1: msgs_to_delete.append(m1)
         
         mock_norm = {"_id": "test_norm_2", "flightNumber": "TEST2", "airline": {"icao": "WZZ"}, "dep": {"icao": "EDDM", "name": "Munich"}, "arr": {"icao": "EGLL", "name": "Heathrow"}, "aircraft": {"airframe": {"name": "A320"}}, "pilot": {"fullname": "Capt. Free"}, "payload": {"pax": 180, "cargo": 10}, "network": "IVAO", "rating": 8.5, "landing": {"rate": -200, "gForce": 1.2}, "delay": 0, "result": {"totals": {"distance": 400, "time": 65, "balance": 8000, "payload": {"pax": 180, "cargo": 10}}}}
-        await send_flight_message(message.channel, "Completed", mock_norm, "test", override_emoji=TEST_EMOJI)
+        m2 = await send_flight_message(message.channel, "Completed", mock_norm, "test", override_emoji=TEST_EMOJI)
+        if m2: msgs_to_delete.append(m2)
+
+        # Чекаємо і видаляємо
+        await asyncio.sleep(5)
+        for m in msgs_to_delete:
+            try: await m.delete()
+            except: pass
+        try: await message.delete()
+        except: pass
         return
 
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
         desc += "**🔒 Admin / System:**\n**`!status`** — System status\n**`!test`** — Run general test\n**`!spy <ID>`** — Dump flight JSON\n"
-        desc += "**`!emoji1`** — Test with :schedule:\n**`!emoji2`** — Test with :free:\n\n"
+        desc += "**`!emoji1`** — Test :schedule: (autodelete)\n**`!emoji2`** — Test :free: (autodelete)\n\n"
         desc += "**🎭 Status Management:**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Add status\n**`!delstatus [num]`** — Delete status\n"
         embed.description = desc
         await message.channel.send(embed=embed)
