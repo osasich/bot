@@ -9,6 +9,7 @@ import random
 import io
 from pathlib import Path
 from itertools import cycle
+from datetime import datetime, timezone # <--- Потрібно для часу
 
 # ---------- НАЛАШТУВАННЯ ----------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -20,8 +21,11 @@ ADMIN_IDS = [
     598767470140063744,  # <-- ЗАМІНИ ЦЕ НА СВІЙ ID
 ]
 
+# 🔥 ЗАПИСУЄМО ЧАС ЗАПУСКУ (UTC) 🔥
+START_TIME = datetime.now(timezone.utc)
+
 STATE_FILE = Path("sent.json")
-STATUS_FILE = Path("statuses.json") # 💾 Файл для збереження статусів
+STATUS_FILE = Path("statuses.json") 
 CHECK_INTERVAL = 30
 BASE_URL = "https://newsky.app/api/airline-api"
 AIRPORTS_DB_URL = "https://raw.githubusercontent.com/mwgg/Airports/master/airports.json"
@@ -35,7 +39,7 @@ client = discord.Client(intents=intents)
 # Глобальна змінна для бази
 AIRPORTS_DB = {}
 
-# --- 🎭 СТАНДАРТНІ СТАТУСИ (Якщо файл пустий) ---
+# --- 🎭 СТАНДАРТНІ СТАТУСИ ---
 DEFAULT_STATUSES = [
     {"type": "play", "name": "🕹️ Tracking with Newsky.app"}
 ]
@@ -52,7 +56,6 @@ def save_state(state):
         STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
     except: pass
 
-# 👇 НОВІ ФУНКЦІЇ ДЛЯ ЗБЕРЕЖЕННЯ СТАТУСІВ 👇
 def load_statuses():
     if not STATUS_FILE.exists():
         return list(DEFAULT_STATUSES)
@@ -69,7 +72,6 @@ def save_statuses():
     except Exception as e:
         print(f"⚠️ Failed to save statuses: {e}")
 
-# Ініціалізація статусів
 status_list = load_statuses()
 status_cycle = cycle(status_list)
 
@@ -233,18 +235,18 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     if details_type == "result":
         raw_pax = f.get("result", {}).get("totals", {}).get("payload", {}).get("pax", 0)
         raw_cargo_units = f.get("result", {}).get("totals", {}).get("payload", {}).get("cargo", 0)
-    else:
+    
+    # Фікс для крашу (якщо API обнулило вантаж)
+    if raw_cargo_units == 0:
+        raw_cargo_units = f.get("payload", {}).get("details", {}).get("cargoWeight", 0) or f.get("payload", {}).get("cargo", 0)
+    
+    if raw_pax == 0 and f.get("type") != "cargo":
         raw_pax = f.get("payload", {}).get("pax", 0)
-        raw_cargo_units = f.get("payload", {}).get("cargo", 0)
     
-    # 🔥 ВИПРАВЛЕННЯ ВАГИ ТА ПАСАЖИРІВ 🔥
-    flight_type = f.get("type", "pax") # Отримуємо тип рейсу (cargo/pax)
-    
-    # 1. Множник ваги 139 для всіх (як просили)
+    flight_type = f.get("type", "pax")
     cargo_multiplier = 139 
     cargo_kg = int(raw_cargo_units * cargo_multiplier)
 
-    # 2. Формування рядка: Якщо Cargo - пасажирів не пишемо
     if flight_type == "cargo":
         payload_str = f"📦 **{cargo_kg}** kg"
     else:
@@ -275,19 +277,32 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         raw_balance = int(t.get("balance", 0))
         formatted_balance = f"{raw_balance:,}".replace(",", ".")
         rating = f.get("rating", 0.0)
-        
         delay = f.get("delay", 0)
         
+        check_g = 0.0
+        check_fpm = 0
+        if "result" in f and "violations" in f["result"]:
+            for v in f["result"]["violations"]:
+                entry = v.get("entry", {}).get("payload", {}).get("touchDown", {})
+                if entry:
+                    check_g = float(entry.get("gForce", 0))
+                    check_fpm = int(entry.get("rate", 0))
+                    break 
+        if check_g == 0 and "landing" in f:
+            check_g = float(f["landing"].get("gForce", 0))
+            check_fpm = int(f["landing"].get("rate", 0) or f["landing"].get("touchDownRate", 0))
+
         title_text = f"😎 {full_cs} completed"
         color_code = 0x2ecc71
-        
         rating_str = f"{get_rating_square(rating)} **{rating}**"
 
-        if raw_balance <= -900000: 
+        # 🔥 Перевірка на краш (3G або 2000fpm) має пріоритет над Emergency 🔥
+        is_hard_crash = abs(check_g) > 3.0 or abs(check_fpm) > 2000
+        
+        if raw_balance <= -900000 or is_hard_crash: 
             title_text = f"💥 {full_cs} CRASHED"
             color_code = 0x992d22 
             rating_str = "💀 **CRASH**"
-        
         elif f.get("emergency") is True or (raw_balance == 0 and dist > 1):
             title_text = f"⚠️ {full_cs} EMERGENCY"
             color_code = 0xe67e22 
@@ -312,101 +327,71 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     if embed:
         await channel.send(embed=embed)
 
-# --- 🔄 РОТАЦІЯ СТАТУСІВ ---
 async def change_status():
     current_status = next(status_cycle)
     activity_type = discord.ActivityType.playing
-    
     if current_status["type"] == "watch":
         activity_type = discord.ActivityType.watching
     elif current_status["type"] == "listen":
         activity_type = discord.ActivityType.listening
-        
     await client.change_presence(activity=discord.Activity(type=activity_type, name=current_status["name"]))
 
 async def status_loop():
     await client.wait_until_ready()
     while not client.is_closed():
         await change_status()
-        await asyncio.sleep(3600) # 1 година
+        await asyncio.sleep(3600)
 
 @client.event
 async def on_message(message):
     if message.author == client.user: return
-    
-    # 🔥🔥🔥 ПЕРЕВІРКА АДМІНА (Server Admin + Manual ID) 🔥🔥🔥
     is_admin = False
-    
-    # 1. Перевірка: чи це ти (по ID)
     if message.author.id in ADMIN_IDS:
         is_admin = True
-    # 2. Перевірка: чи має користувач адмінку на сервері (стара логіка)
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
 
-    # 📚 HELP COMMAND (ALL VISIBLE)
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
-        desc = "**🔹 User Commands:**\n"
-        desc += "**`!help`** — Show this list\n\n"
-        
-        desc += "**🔒 Admin / System (Restricted):**\n"
-        desc += "**`!status`** — System status\n"
-        desc += "**`!test [min]`** — Run test scenarios\n"
-        desc += "**`!spy <ID>`** — Dump flight JSON\n\n"
-        
-        desc += "**🎭 Status Management (Admin):**\n"
-        desc += "**`!next`** — Force next status\n"
-        desc += "**`!addstatus <type> <text>`** — Save & Add status\n"
-        desc += "**`!delstatus [num]`** — Delete status\n"
-            
+        desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
+        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n\n"
+        desc += "**🎭 Status Management (Admin):**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Save & Add status\n**`!delstatus [num]`** — Delete status\n"
         embed.description = desc
         await message.channel.send(embed=embed)
         return
     
-    # ⏩ NEXT STATUS (ADMIN)
     if message.content == "!next":
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         await change_status()
         await message.channel.send("✅ **Status switched!**")
         return
 
-    # ➕ ADD STATUS (ADMIN - PERSISTENT)
     if message.content.startswith("!addstatus"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         parts = message.content.split(maxsplit=2)
         if len(parts) < 3: return await message.channel.send("⚠️ Usage: `!addstatus <watch/play> <text>`")
-        
         sType = parts[1].lower()
         if sType not in ["watch", "play", "listen"]: return await message.channel.send("⚠️ Use: `watch`, `play`, `listen`")
-        
-        # Додаємо у список
         status_list.append({"type": sType, "name": parts[2]})
-        save_statuses() # <--- ЗБЕРІГАЄМО У ФАЙЛ
-        
+        save_statuses()
         global status_cycle
-        status_cycle = cycle(status_list) # Оновлюємо цикл
+        status_cycle = cycle(status_list)
         await message.channel.send(f"✅ Saved & Added: **{parts[2]}**")
         return
 
-    # ➖ DELETE STATUS (ADMIN - PERSISTENT)
     if message.content.startswith("!delstatus"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
-        
         parts = message.content.split()
         if len(parts) == 1:
             list_str = "\n".join([f"`{i+1}.` {s['type'].upper()}: {s['name']}" for i, s in enumerate(status_list)])
             embed = discord.Embed(title="🗑️ Delete Status", description=f"Type `!delstatus <number>` to delete.\n\n{list_str}", color=0xe74c3c)
             return await message.channel.send(embed=embed)
-        
         try:
             idx = int(parts[1]) - 1
             if 0 <= idx < len(status_list):
                 if len(status_list) <= 1: return await message.channel.send("⚠️ Cannot delete the last status!")
-                
                 removed = status_list.pop(idx)
-                save_statuses() # <--- ЗБЕРІГАЄМО ЗМІНИ У ФАЙЛ
-                
+                save_statuses()
                 status_cycle = cycle(status_list) 
                 await message.channel.send(f"🗑️ Deleted & Saved: **{removed['name']}**")
             else:
@@ -415,7 +400,6 @@ async def on_message(message):
             await message.channel.send("⚠️ Please enter a number.")
         return
 
-    # 📡 STATUS COMMAND
     if message.content == "!status":
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         msg = await message.channel.send("🔄 **Checking Systems...**")
@@ -424,14 +408,16 @@ async def on_message(message):
             test = await fetch_api(session, "/flights/ongoing")
             if test is not None: api_status = "✅ Connected to Newsky"
         
+        launch_str = START_TIME.strftime("%d-%m-%Y %H:%M:%S UTC")
+
         embed = discord.Embed(title="🤖 Bot System Status", color=0x2ecc71)
         embed.add_field(name="📡 Newsky API", value=api_status, inline=False)
         embed.add_field(name="🌍 Airports DB", value=f"✅ Loaded ({len(AIRPORTS_DB)} airports)", inline=False)
         embed.add_field(name="📶 Discord Ping", value=f"**{round(client.latency * 1000)}ms**", inline=False)
+        embed.add_field(name="🚀 Launched at", value=f"`{launch_str}`", inline=False)
         await msg.edit(content=None, embed=embed)
         return
 
-    # 🕵️ SPY COMMAND
     if message.content.startswith("!spy"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         try:
@@ -447,7 +433,6 @@ async def on_message(message):
         except Exception as e: await message.channel.send(f"Error: {e}")
         return
 
-    # 🛠️ TEST COMMAND
     if message.content.startswith("!test"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         parts = message.content.split()
@@ -525,7 +510,12 @@ async def main_loop():
 
                 save_state(state)
             except Exception as e: print(f"Loop Error: {e}")
-            await asyncio.sleep(CHECK_INTERVAL)
+            
+            # 🔥🔥🔥 СИНХРОНІЗАЦІЯ ЧАСУ (:00 або :30) 🔥🔥🔥
+            # Замість простого сну, чекаємо рівно до наступної позначки
+            now = datetime.now()
+            sleep_time = 30 - (now.second % 30)
+            await asyncio.sleep(sleep_time)
 
 @client.event
 async def on_ready():
