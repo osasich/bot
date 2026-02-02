@@ -351,41 +351,6 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
 
-@client.event
-async def on_message(message):
-    if message.author == client.user: return
-    
-    # ... (твоя перевірка на адміна) ...
-    is_admin = False
-    if message.author.id in ADMIN_IDS:
-        is_admin = True
-    elif message.guild and message.author.guild_permissions.administrator:
-        is_admin = True
-
-    # 👇👇👇 ВСТАВЛЯЙ КОД ТУТ 👇👇👇
-    
-    # 🧪 ТЕСТ ЕМОДЗІ
-    if message.content.startswith("!emoji"):
-        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
-        
-        parts = message.content.split()
-        if len(parts) < 2:
-            return await message.channel.send("⚠️ Напиши назву! Приклад: `!emoji schedule_pax`")
-        
-        target_name = parts[1]
-        
-        # Шукаємо емодзі на сервері серед завантажених
-        emoji = discord.utils.get(message.guild.emojis, name=target_name)
-        
-        if emoji:
-            # Бот відправляє сам смайлик + його код (щоб ти міг скопіювати)
-            await message.channel.send(f"Виглядає так: {emoji}\nТвій код для вставки: `{emoji}`")
-        else:
-            await message.channel.send(f"❌ Не знайшов емодзі з назвою **{target_name}**. Перевір точну назву в налаштуваннях сервера.")
-        return
-
-    if message.content == "!help":
-    
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
@@ -560,4 +525,3 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
-
