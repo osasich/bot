@@ -123,12 +123,8 @@ def format_airport_string(icao, api_name):
         name = db_data.get("name", "") or ""
         country = db_data.get("country", "XX")
         
-        # 🔥 ВИПРАВЛЕННЯ НАЗВ МІСТ 🔥
         if city.lower() == "kiev": city = "Kyiv"
         name = name.replace("Kiev", "Kyiv")
-        
-        if city.lower() == "dnipropetrovsk": city = "Dnipro"
-        name = name.replace("Dnipropetrovsk", "Dnipro")      
         
         clean_name = clean_text(name)
         display_text = ""
@@ -216,7 +212,7 @@ async def fetch_api(session, path, method="GET", body=None):
     except: return None
 
 # ---------- MESSAGE GENERATOR ----------
-async def send_flight_message(channel, status, f, details_type="ongoing", override_emoji=None):
+async def send_flight_message(channel, status, f, details_type="ongoing"):
     fid = f.get("_id") or f.get("id") or "test_id"
     if status == "Completed":
         flight_url = f"https://newsky.app/flight/{fid}"
@@ -240,7 +236,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing", overri
         raw_pax = f.get("result", {}).get("totals", {}).get("payload", {}).get("pax", 0)
         raw_cargo_units = f.get("result", {}).get("totals", {}).get("payload", {}).get("cargo", 0)
     
-    # Фікс для крашу
+    # Фікс для крашу (якщо API обнулило вантаж)
     if raw_cargo_units == 0:
         raw_cargo_units = f.get("payload", {}).get("details", {}).get("cargoWeight", 0) or f.get("payload", {}).get("cargo", 0)
     
@@ -248,13 +244,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing", overri
         raw_pax = f.get("payload", {}).get("pax", 0)
     
     flight_type = f.get("type", "pax")
-    
-    # --- 🔥 ЛОГІКА ЕМОДЗІ (ПРОСТА) 🔥 ---
-    if override_emoji:
-        status_emoji = override_emoji
-    else:
-        status_emoji = "" 
-
     cargo_multiplier = 139 
     cargo_kg = int(raw_cargo_units * cargo_multiplier)
 
@@ -271,7 +260,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing", overri
         desc = (
             f"{dep_str}{arrow}{arr_str}\n\n"
             f"✈️ **{ac}**\n\n"
-            f"{status_emoji}\n\n" 
             f"{get_timing(delay)}\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
             f"{payload_str}"
@@ -324,7 +312,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing", overri
         desc = (
             f"{dep_str}{arrow}{arr_str}\n\n"
             f"✈️ **{ac}**\n\n"
-            f"{status_emoji}\n\n" 
             f"{get_timing(delay)}\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
             f"🌐 **{net.upper()}**\n\n"
@@ -337,8 +324,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing", overri
         embed = discord.Embed(title=title_text, url=flight_url, description=desc, color=color_code)
 
     if embed:
-        # 🔥 ПОВЕРТАЄМО ПОВІДОМЛЕННЯ ДЛЯ ВИДАЛЕННЯ 🔥
-        return await channel.send(embed=embed) 
+        await channel.send(embed=embed)
 
 async def change_status():
     current_status = next(status_cycle)
@@ -364,75 +350,38 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
 
-    # 👇👇👇 ТЕСТ 1: Емодзі :schedule: (АВТОВИДАЛЕННЯ) 👇👇👇
-    if message.content == "!emoji1":
+    # 👇👇👇 ВИПРАВЛЕНА КОМАНДА !EMOJI (ОТРИМАТИ КОД) 👇👇👇
+    if message.content.startswith("!emoji"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+        parts = message.content.split()
+        if len(parts) < 2: return await message.channel.send("⚠️ Usage: `!emoji <name>`")
         
-        TEST_EMOJI = ":schedule:"
-        msgs_to_delete = [] # Сюди збираємо повідомлення
+        target_name = parts[1]
         
-        # Відправляємо і запам'ятовуємо
-        m_intro = await message.channel.send(f"🧪 **Test Mode 1: {TEST_EMOJI}** (Autodelete in 5s)")
-        msgs_to_delete.append(m_intro)
+        # Шукаємо в налаштуваннях БОТА (Global), а не сервера
+        emoji = discord.utils.get(client.emojis, name=target_name)
         
-        mock_dep = {"_id": "test_dep", "flightNumber": "TEST1", "airline": {"icao": "UKR"}, "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"}, "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"}, "payload": {"pax": 145, "cargo": 35}, "delay": 2}
-        m1 = await send_flight_message(message.channel, "Departed", mock_dep, "test", override_emoji=TEST_EMOJI)
-        if m1: msgs_to_delete.append(m1)
-        
-        mock_norm = {"_id": "test_norm", "flightNumber": "TEST1", "airline": {"icao": "UKR"}, "dep": {"icao": "UKBB", "name": "Boryspil"}, "arr": {"icao": "LPMA", "name": "Madeira"}, "aircraft": {"airframe": {"name": "B738"}}, "pilot": {"fullname": "Capt. Test"}, "payload": {"pax": 100, "cargo": 40}, "network": "VATSIM", "rating": 9.9, "landing": {"rate": -150, "gForce": 1.1}, "delay": -10, "result": {"totals": {"distance": 350, "time": 55, "balance": 12500, "payload": {"pax": 100, "cargo": 40}}}}
-        m2 = await send_flight_message(message.channel, "Completed", mock_norm, "test", override_emoji=TEST_EMOJI)
-        if m2: msgs_to_delete.append(m2)
-        
-        mock_emerg = mock_norm.copy(); mock_emerg["_id"] = "test_emerg"; mock_emerg["emergency"] = True; mock_emerg["delay"] = 45; mock_emerg["result"] = {"totals": {"distance": 350, "time": 55, "balance": 0, "payload": {"pax": 100, "cargo": 40}}}
-        m3 = await send_flight_message(message.channel, "Completed", mock_emerg, "test", override_emoji=TEST_EMOJI)
-        if m3: msgs_to_delete.append(m3)
-        
-        mock_crash = mock_norm.copy(); mock_crash["_id"] = "test_crash"; mock_crash["landing"] = {"rate": -2500, "gForce": 4.5}; mock_crash["rating"] = 0.0; mock_crash["delay"] = 0; mock_crash["result"] = {"totals": {"distance": 350, "time": 55, "balance": -1150000, "payload": {"pax": 100, "cargo": 40}}}
-        m4 = await send_flight_message(message.channel, "Completed", mock_crash, "test", override_emoji=TEST_EMOJI)
-        if m4: msgs_to_delete.append(m4)
-
-        # Чекаємо і видаляємо
-        await asyncio.sleep(5)
-        for m in msgs_to_delete:
-            try: await m.delete()
-            except: pass
-        try: await message.delete() # Видаляємо команду користувача
-        except: pass
+        if emoji:
+            await message.channel.send(f"Знайшов! Ось код:\n`{emoji}`")
+        else:
+            await message.channel.send(f"❌ Не знайшов емодзі **{target_name}** в налаштуваннях бота.")
         return
 
-    # 👇👇👇 ТЕСТ 2: Емодзі :free: (АВТОВИДАЛЕННЯ) 👇👇👇
-    if message.content == "!emoji2":
+    # 👇👇👇 НОВА КОМАНДА ДЛЯ ТЕСТУ (ПЕРЕВІРИТИ, ЯК ВИГЛЯДАЄ) 👇👇👇
+    if message.content.startswith("!testemoji"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+        parts = message.content.split()
+        if len(parts) < 2: return await message.channel.send("⚠️ Встав код! Приклад: `!testemoji <:my_code:123456>`")
         
-        TEST_EMOJI = ":free:"
-        msgs_to_delete = []
-        
-        m_intro = await message.channel.send(f"🧪 **Test Mode 2: {TEST_EMOJI}** (Autodelete in 5s)")
-        msgs_to_delete.append(m_intro)
-        
-        mock_dep = {"_id": "test_dep_2", "flightNumber": "TEST2", "airline": {"icao": "WZZ"}, "dep": {"icao": "EDDM", "name": "Munich"}, "arr": {"icao": "EGLL", "name": "Heathrow"}, "aircraft": {"airframe": {"name": "A320"}}, "pilot": {"fullname": "Capt. Free"}, "payload": {"pax": 180, "cargo": 10}, "delay": 5}
-        m1 = await send_flight_message(message.channel, "Departed", mock_dep, "test", override_emoji=TEST_EMOJI)
-        if m1: msgs_to_delete.append(m1)
-        
-        mock_norm = {"_id": "test_norm_2", "flightNumber": "TEST2", "airline": {"icao": "WZZ"}, "dep": {"icao": "EDDM", "name": "Munich"}, "arr": {"icao": "EGLL", "name": "Heathrow"}, "aircraft": {"airframe": {"name": "A320"}}, "pilot": {"fullname": "Capt. Free"}, "payload": {"pax": 180, "cargo": 10}, "network": "IVAO", "rating": 8.5, "landing": {"rate": -200, "gForce": 1.2}, "delay": 0, "result": {"totals": {"distance": 400, "time": 65, "balance": 8000, "payload": {"pax": 180, "cargo": 10}}}}
-        m2 = await send_flight_message(message.channel, "Completed", mock_norm, "test", override_emoji=TEST_EMOJI)
-        if m2: msgs_to_delete.append(m2)
-
-        # Чекаємо і видаляємо
-        await asyncio.sleep(5)
-        for m in msgs_to_delete:
-            try: await m.delete()
-            except: pass
-        try: await message.delete()
-        except: pass
+        code = parts[1]
+        await message.channel.send(f"Ось твій смайлик: {code}")
         return
 
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
-        desc += "**🔒 Admin / System:**\n**`!status`** — System status\n**`!test`** — Run general test\n**`!spy <ID>`** — Dump flight JSON\n"
-        desc += "**`!emoji1`** — Test :schedule: (autodelete)\n**`!emoji2`** — Test :free: (autodelete)\n\n"
-        desc += "**🎭 Status Management:**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Add status\n**`!delstatus [num]`** — Delete status\n"
+        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!emoji <name>`** — Get emoji code\n**`!testemoji <code>`** — Test display\n\n"
+        desc += "**🎭 Status Management (Admin):**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Save & Add status\n**`!delstatus [num]`** — Delete status\n"
         embed.description = desc
         await message.channel.send(embed=embed)
         return
@@ -588,11 +537,10 @@ async def main_loop():
                 save_state(state)
             except Exception as e: print(f"Loop Error: {e}")
             
-            # 🔥 СУПЕР ТОЧНА СИНХРОНІЗАЦІЯ (:00 та :30) 🔥
+            # 🔥🔥🔥 СИНХРОНІЗАЦІЯ ЧАСУ (:00 або :30) 🔥🔥🔥
+            # Замість простого сну, чекаємо рівно до наступної позначки
             now = datetime.now()
-            # Рахуємо, скільки секунд і мікросекунд пройшло з початку циклу
-            elapsed = (now.second % 30) + (now.microsecond / 1_000_000)
-            sleep_time = 30 - elapsed
+            sleep_time = 30 - (now.second % 30)
             await asyncio.sleep(sleep_time)
 
 @client.event
