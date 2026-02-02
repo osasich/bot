@@ -123,8 +123,12 @@ def format_airport_string(icao, api_name):
         name = db_data.get("name", "") or ""
         country = db_data.get("country", "XX")
         
+        # 🔥 ВИПРАВЛЕННЯ НАЗВ МІСТ 🔥
         if city.lower() == "kiev": city = "Kyiv"
         name = name.replace("Kiev", "Kyiv")
+        
+        if city.lower() == "dnipropetrovsk": city = "Dnipro" # <--- Dnipro FIX
+        name = name.replace("Dnipropetrovsk", "Dnipro")      # <--- Dnipro FIX
         
         clean_name = clean_text(name)
         display_text = ""
@@ -296,6 +300,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         color_code = 0x2ecc71
         rating_str = f"{get_rating_square(rating)} **{rating}**"
 
+        # 🔥 Перевірка на краш (3G або 2000fpm) має пріоритет над Emergency 🔥
         is_hard_crash = abs(check_g) > 3.0 or abs(check_fpm) > 2000
         
         if raw_balance <= -900000 or is_hard_crash: 
@@ -350,37 +355,10 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
 
-    # 👇👇👇 ВИПРАВЛЕНА КОМАНДА !EMOJI (ОТРИМАТИ КОД) 👇👇👇
-    if message.content.startswith("!emoji"):
-        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
-        parts = message.content.split()
-        if len(parts) < 2: return await message.channel.send("⚠️ Usage: `!emoji <name>`")
-        
-        target_name = parts[1]
-        
-        # Шукаємо в налаштуваннях БОТА (Global), а не сервера
-        emoji = discord.utils.get(client.emojis, name=target_name)
-        
-        if emoji:
-            await message.channel.send(f"Знайшов! Ось код:\n`{emoji}`")
-        else:
-            await message.channel.send(f"❌ Не знайшов емодзі **{target_name}** в налаштуваннях бота.")
-        return
-
-    # 👇👇👇 НОВА КОМАНДА ДЛЯ ТЕСТУ (ПЕРЕВІРИТИ, ЯК ВИГЛЯДАЄ) 👇👇👇
-    if message.content.startswith("!testemoji"):
-        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
-        parts = message.content.split()
-        if len(parts) < 2: return await message.channel.send("⚠️ Встав код! Приклад: `!testemoji <:my_code:123456>`")
-        
-        code = parts[1]
-        await message.channel.send(f"Ось твій смайлик: {code}")
-        return
-
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
-        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!emoji <name>`** — Get emoji code\n**`!testemoji <code>`** — Test display\n\n"
+        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n\n"
         desc += "**🎭 Status Management (Admin):**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Save & Add status\n**`!delstatus [num]`** — Delete status\n"
         embed.description = desc
         await message.channel.send(embed=embed)
@@ -537,10 +515,11 @@ async def main_loop():
                 save_state(state)
             except Exception as e: print(f"Loop Error: {e}")
             
-            # 🔥🔥🔥 СИНХРОНІЗАЦІЯ ЧАСУ (:00 або :30) 🔥🔥🔥
-            # Замість простого сну, чекаємо рівно до наступної позначки
+            # 🔥 СУПЕР ТОЧНА СИНХРОНІЗАЦІЯ (:00 та :30) 🔥
             now = datetime.now()
-            sleep_time = 30 - (now.second % 30)
+            # Рахуємо, скільки секунд і мікросекунд пройшло з початку циклу
+            elapsed = (now.second % 30) + (now.microsecond / 1_000_000)
+            sleep_time = 30 - elapsed
             await asyncio.sleep(sleep_time)
 
 @client.event
