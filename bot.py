@@ -37,7 +37,7 @@ AIRPORTS_DB = {}
 
 # --- 🎭 СТАНДАРТНІ СТАТУСИ (Якщо файл пустий) ---
 DEFAULT_STATUSES = [
-    {"type": "play",  "name": "🕹️ Tracking with Newsky.app"}
+    {"type": "play", "name": "🕹️ Tracking with Newsky.app"}
 ]
 
 # ---------- ДОПОМІЖНІ ФУНКЦІЇ ----------
@@ -237,7 +237,18 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         raw_pax = f.get("payload", {}).get("pax", 0)
         raw_cargo_units = f.get("payload", {}).get("cargo", 0)
     
-    cargo_kg = int(raw_cargo_units * 112)
+    # 🔥 ВИПРАВЛЕННЯ ВАГИ ТА ПАСАЖИРІВ 🔥
+    flight_type = f.get("type", "pax") # Отримуємо тип рейсу (cargo/pax)
+    
+    # 1. Множник ваги 139 для всіх (як просили)
+    cargo_multiplier = 139 
+    cargo_kg = int(raw_cargo_units * cargo_multiplier)
+
+    # 2. Формування рядка: Якщо Cargo - пасажирів не пишемо
+    if flight_type == "cargo":
+        payload_str = f"📦 **{cargo_kg}** kg"
+    else:
+        payload_str = f"👫 **{raw_pax}** Pax  |  📦 **{cargo_kg}** kg"
 
     embed = None
     arrow = " \u2003➡️\u2003 "
@@ -249,7 +260,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             f"✈️ **{ac}**\n\n"
             f"{get_timing(delay)}\n\n"
             f"👨‍✈️ **{pilot}**\n\n"
-            f"👫 **{raw_pax}** Pax  |  📦 **{cargo_kg}** kg"
+            f"{payload_str}"
         )
         embed = discord.Embed(title=f"🛫 {full_cs} departed", url=flight_url, description=desc, color=0x3498db)
 
@@ -291,7 +302,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             f"👨‍✈️ **{pilot}**\n\n"
             f"🌐 **{net.upper()}**\n\n"
             f"{landing_info}\n\n" 
-            f"👫 **{raw_pax}** Pax  |  📦 **{cargo_kg}** kg\n\n"
+            f"{payload_str}\n\n"
             f"📏 **{dist}** nm  |  ⏱️ **{format_time(ftime)}**\n\n"
             f"💰 **{formatted_balance} $**\n\n"
             f"{rating_str}"
@@ -524,5 +535,3 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
-
-
