@@ -165,9 +165,9 @@ def format_time(minutes):
 def get_rating_square(rating):
     try:
         r = float(rating)
-        if r >= 9.5: return "🟩"
-        if r >= 8.0: return "🟨"
-        if r >= 5.0: return "🟧"
+        if r >= 8.0: return "🟩"
+        if r >= 6.0: return "🟨" 
+        if r >= 4.0: return "🟧"
         return "🟥"
     except: return "⬜"
 
@@ -524,4 +524,5 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
+
 
