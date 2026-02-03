@@ -26,7 +26,7 @@ START_TIME = datetime.now(timezone.utc)
 
 STATE_FILE = Path("sent.json")
 STATUS_FILE = Path("statuses.json") 
-CHECK_INTERVAL = 30
+CHECK_INTERVAL = 30 # Інтервал перевірки в секундах
 BASE_URL = "https://newsky.app/api/airline-api"
 AIRPORTS_DB_URL = "https://raw.githubusercontent.com/mwgg/Airports/master/airports.json"
 HEADERS = {"Authorization": f"Bearer {NEWSKY_API_KEY}"}
@@ -127,8 +127,8 @@ def format_airport_string(icao, api_name):
         if city.lower() == "kiev": city = "Kyiv"
         name = name.replace("Kiev", "Kyiv")
         
-        if city.lower() == "dnipropetrovsk": city = "Dnipro" # <--- Dnipro FIX
-        name = name.replace("Dnipropetrovsk", "Dnipro")      # <--- Dnipro FIX
+        if city.lower() == "dnipropetrovsk": city = "Dnipro"
+        name = name.replace("Dnipropetrovsk", "Dnipro")      
         
         clean_name = clean_text(name)
         display_text = ""
@@ -234,22 +234,17 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     pilot = f.get("pilot", {}).get("fullname", "Pilot")
     
     raw_pax = 0
-    raw_cargo_units = 0
-
     if details_type == "result":
         raw_pax = f.get("result", {}).get("totals", {}).get("payload", {}).get("pax", 0)
-        raw_cargo_units = f.get("result", {}).get("totals", {}).get("payload", {}).get("cargo", 0)
-    
-    # Фікс для крашу (якщо API обнулило вантаж)
-    if raw_cargo_units == 0:
-        raw_cargo_units = f.get("payload", {}).get("details", {}).get("cargoWeight", 0) or f.get("payload", {}).get("cargo", 0)
     
     if raw_pax == 0 and f.get("type") != "cargo":
         raw_pax = f.get("payload", {}).get("pax", 0)
     
     flight_type = f.get("type", "pax")
-    cargo_multiplier = 139 
-    cargo_kg = int(raw_cargo_units * cargo_multiplier)
+    
+    # --- 🔥 ВИПРАВЛЕННЯ ВАГИ ВАНТАЖУ (ТІЛЬКИ З JSON) 🔥 ---
+    # Беремо пряме значення ваги з payload -> weights -> cargo (напр. 2486)
+    cargo_kg = int(f.get("payload", {}).get("weights", {}).get("cargo", 0))
 
     if flight_type == "cargo":
         payload_str = f"📦 **{cargo_kg}** kg"
@@ -300,7 +295,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         color_code = 0x2ecc71
         rating_str = f"{get_rating_square(rating)} **{rating}**"
 
-        # 🔥 Перевірка на краш (3G або 2000fpm) має пріоритет над Emergency 🔥
         is_hard_crash = abs(check_g) > 3.0 or abs(check_fpm) > 2000
         
         if raw_balance <= -900000 or is_hard_crash: 
@@ -515,12 +509,8 @@ async def main_loop():
                 save_state(state)
             except Exception as e: print(f"Loop Error: {e}")
             
-            # 🔥 СУПЕР ТОЧНА СИНХРОНІЗАЦІЯ (:00 та :30) 🔥
-            now = datetime.now()
-            # Рахуємо, скільки секунд і мікросекунд пройшло з початку циклу
-            elapsed = (now.second % 30) + (now.microsecond / 1_000_000)
-            sleep_time = 30 - elapsed
-            await asyncio.sleep(sleep_time)
+            # 🔥 Простий інтервал (без точної синхронізації) 🔥
+            await asyncio.sleep(CHECK_INTERVAL)
 
 @client.event
 async def on_ready():
