@@ -466,4 +466,68 @@ async def main_loop():
     await update_airports_db()
     
     channel = client.get_channel(CHANNEL_ID)
+    state = load_state()
+    first_run = True
+
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                ongoing = await fetch_api(session, "/flights/ongoing")
+                if ongoing and "results" in ongoing:
+                    print(f"📡 Tracking {len(ongoing['results'])} flights...", end='\r')
+                    for raw_f in ongoing["results"]:
+                        fid = str(raw_f.get("_id") or raw_f.get("id"))
+                        det = await fetch_api(session, f"/flight/{fid}")
+                        if not det or "flight" not in det: continue
+                        f = det["flight"]
+                        cs = f.get("flightNumber") or f.get("callsign") or "N/A"
+                        if cs == "N/A": continue
+                        
+                        state.setdefault(fid, {})
+                        
+                        if f.get("takeoffTimeAct") and not state[fid].get("takeoff"):
+                            await send_flight_message(channel, "Departed", f, "ongoing")
+                            state[fid]["takeoff"] = True
+
+                recent = await fetch_api(session, "/flights/recent", method="POST", body={"count": 5})
+                if recent and "results" in recent:
+                    for raw_f in recent["results"]:
+                        fid = str(raw_f.get("_id") or raw_f.get("id"))
+                        if first_run:
+                            state.setdefault(fid, {})["completed"] = True
+                            continue
+                        if fid in state and state[fid].get("completed"): continue
+                        if not raw_f.get("close"): continue
+
+                        det = await fetch_api(session, f"/flight/{fid}")
+                        if not det or "flight" not in det: continue
+                        f = det["flight"]
+                        cs = f.get("flightNumber") or f.get("callsign") or "N/A"
+                        if cs == "N/A": continue
+
+                        await send_flight_message(channel, "Completed", f, "result")
+                        state.setdefault(fid, {})["completed"] = True
+                        print(f"✅ Report Sent: {cs}")
+                
+                if first_run:
+                    print("🔕 First run sync complete. No spam.")
+                    first_run = False
+
+                save_state(state)
+            except Exception as e: print(f"Loop Error: {e}")
+            
+            # 🔥 Простий інтервал (без точної синхронізації) 🔥
+            await asyncio.sleep(CHECK_INTERVAL)
+
+@client.event
+async def on_ready():
+    global MONITORING_STARTED
+    if MONITORING_STARTED: return
+    MONITORING_STARTED = True
     
+    print(f"✅ Bot online: {client.user}")
+    print("🚀 MONITORING STARTED")
+    client.loop.create_task(status_loop())
+    client.loop.create_task(main_loop())
+
+client.run(DISCORD_TOKEN)
