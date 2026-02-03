@@ -295,12 +295,19 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         color_code = 0x2ecc71
         rating_str = f"{get_rating_square(rating)} **{rating}**"
 
+        # 🔥 Перевірка на краш (3G або 2000fpm) має пріоритет над Emergency 🔥
         is_hard_crash = abs(check_g) > 3.0 or abs(check_fpm) > 2000
         
-        if raw_balance <= -900000 or is_hard_crash: 
+        # --- ФОРМУВАННЯ РЯДКА ЧАСУ (Delay / On Time) ---
+        time_info_str = f"{get_timing(delay)}\n\n" # За замовчуванням показуємо
+
+        if is_hard_crash: 
             title_text = f"💥 {full_cs} CRASHED"
             color_code = 0x992d22 
             rating_str = "💀 **CRASH**"
+            formatted_balance = "-1.000.000" # Жорстка заміна балансу при краші
+            time_info_str = "" # При краші видаляємо рядок затримки
+        
         elif f.get("emergency") is True or (raw_balance == 0 and dist > 1):
             title_text = f"⚠️ {full_cs} EMERGENCY"
             color_code = 0xe67e22 
@@ -311,7 +318,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         desc = (
             f"{dep_str}{arrow}{arr_str}\n\n"
             f"✈️ **{ac}**\n\n"
-            f"{get_timing(delay)}\n\n"
+            f"{time_info_str}" # <--- Тут тепер змінна (пуста при краші)
             f"👨‍✈️ **{pilot}**\n\n"
             f"🌐 **{net.upper()}**\n\n"
             f"{landing_info}\n\n" 
