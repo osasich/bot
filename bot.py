@@ -38,6 +38,8 @@ client = discord.Client(intents=intents)
 
 # Глобальна змінна для бази
 AIRPORTS_DB = {}
+# 🔥 Глобальна змінна-запобіжник від дублікатів
+MONITORING_STARTED = False
 
 # --- 🎭 СТАНДАРТНІ СТАТУСИ ---
 DEFAULT_STATUSES = [
@@ -243,7 +245,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     flight_type = f.get("type", "pax")
     
     # --- 🔥 ВИПРАВЛЕННЯ ВАГИ ВАНТАЖУ (ТІЛЬКИ З JSON) 🔥 ---
-    # Беремо пряме значення ваги з payload -> weights -> cargo (напр. 2486)
     cargo_kg = int(f.get("payload", {}).get("weights", {}).get("cargo", 0))
 
     if flight_type == "cargo":
@@ -295,11 +296,10 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         color_code = 0x2ecc71
         rating_str = f"{get_rating_square(rating)} **{rating}**"
 
-        # 🔥 Перевірка на краш (3G або 2000fpm) має пріоритет над Emergency 🔥
         is_hard_crash = abs(check_g) > 3.0 or abs(check_fpm) > 2000
         
         # --- ФОРМУВАННЯ РЯДКА ЧАСУ (Delay / On Time) ---
-        time_info_str = f"{get_timing(delay)}\n\n" # За замовчуванням показуємо
+        time_info_str = f"{get_timing(delay)}\n\n"
 
         if is_hard_crash: 
             title_text = f"💥 {full_cs} CRASHED"
@@ -318,7 +318,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         desc = (
             f"{dep_str}{arrow}{arr_str}\n\n"
             f"✈️ **{ac}**\n\n"
-            f"{time_info_str}" # <--- Тут тепер змінна (пуста при краші)
+            f"{time_info_str}" 
             f"👨‍✈️ **{pilot}**\n\n"
             f"🌐 **{net.upper()}**\n\n"
             f"{landing_info}\n\n" 
@@ -466,64 +466,4 @@ async def main_loop():
     await update_airports_db()
     
     channel = client.get_channel(CHANNEL_ID)
-    state = load_state()
-    first_run = True
-
-    async with aiohttp.ClientSession() as session:
-        while True:
-            try:
-                ongoing = await fetch_api(session, "/flights/ongoing")
-                if ongoing and "results" in ongoing:
-                    print(f"📡 Tracking {len(ongoing['results'])} flights...", end='\r')
-                    for raw_f in ongoing["results"]:
-                        fid = str(raw_f.get("_id") or raw_f.get("id"))
-                        det = await fetch_api(session, f"/flight/{fid}")
-                        if not det or "flight" not in det: continue
-                        f = det["flight"]
-                        cs = f.get("flightNumber") or f.get("callsign") or "N/A"
-                        if cs == "N/A": continue
-                        
-                        state.setdefault(fid, {})
-                        
-                        if f.get("takeoffTimeAct") and not state[fid].get("takeoff"):
-                            await send_flight_message(channel, "Departed", f, "ongoing")
-                            state[fid]["takeoff"] = True
-
-                recent = await fetch_api(session, "/flights/recent", method="POST", body={"count": 5})
-                if recent and "results" in recent:
-                    for raw_f in recent["results"]:
-                        fid = str(raw_f.get("_id") or raw_f.get("id"))
-                        if first_run:
-                            state.setdefault(fid, {})["completed"] = True
-                            continue
-                        if fid in state and state[fid].get("completed"): continue
-                        if not raw_f.get("close"): continue
-
-                        det = await fetch_api(session, f"/flight/{fid}")
-                        if not det or "flight" not in det: continue
-                        f = det["flight"]
-                        cs = f.get("flightNumber") or f.get("callsign") or "N/A"
-                        if cs == "N/A": continue
-
-                        await send_flight_message(channel, "Completed", f, "result")
-                        state.setdefault(fid, {})["completed"] = True
-                        print(f"✅ Report Sent: {cs}")
-                
-                if first_run:
-                    print("🔕 First run sync complete. No spam.")
-                    first_run = False
-
-                save_state(state)
-            except Exception as e: print(f"Loop Error: {e}")
-            
-            # 🔥 Простий інтервал (без точної синхронізації) 🔥
-            await asyncio.sleep(CHECK_INTERVAL)
-
-@client.event
-async def on_ready():
-    print(f"✅ Bot online: {client.user}")
-    print("🚀 MONITORING STARTED")
-    client.loop.create_task(status_loop())
-    client.loop.create_task(main_loop())
-
-client.run(DISCORD_TOKEN)
+    
