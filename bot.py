@@ -296,6 +296,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         color_code = 0x2ecc71
         rating_str = f"{get_rating_square(rating)} **{rating}**"
 
+        # 🔥 Перевірка на краш (3G або 2000fpm) має пріоритет над Emergency 🔥
         is_hard_crash = abs(check_g) > 3.0 or abs(check_fpm) > 2000
         
         # --- ФОРМУВАННЯ РЯДКА ЧАСУ (Delay / On Time) ---
