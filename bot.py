@@ -43,10 +43,10 @@ MONITORING_STARTED = False
 
 # --- 🎭 СТАНДАРТНІ СТАТУСИ ---
 DEFAULT_STATUSES = [
-    {"type": "play", "name": "🕹️Tracking with Newsky.app"}
-    {"type": "play", "name": "🕹️Playing AirportSim"}
-    {"type": "play", "name": "✈️Playing Microsoft Flight Simulator 2024"}
-    {"type": "listen", "name": "🎧LiveATC @ KBP"}
+    {"type": "play", "name": "🕹️Tracking with Newsky.app"},
+    {"type": "play", "name": "🕹️Playing AirportSim"},
+    {"type": "play", "name": "✈️Playing Microsoft Flight Simulator 2024"},
+    {"type": "listen", "name": "🎧LiveATC @ KBP"},
     {"type": "watch", "name": "🔴Watching Youtube KAZUAR AVIA"}
 ]
 
@@ -536,5 +536,6 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
+
 
 
