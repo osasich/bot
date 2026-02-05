@@ -135,6 +135,18 @@ def format_airport_string(icao, api_name):
         
         if city.lower() == "dnipropetrovsk": city = "Dnipro"
         name = name.replace("Dnipropetrovsk", "Dnipro")      
+
+        if city.lower() == "kirovograd": city = "Kropyvnytskyi"
+        name = name.replace("Kirovograd", "Kropyvnytskyi")
+
+        if city.lower() == "nikolayev": city = "Mykolaiv"
+        name = name.replace("Nikolayev", "Mykolaiv")
+
+        if city.lower() == "odessa": city = "Odesa"
+        name = name.replace("Odessa", "Odesa")
+
+        if city.lower() == "vinnitsa": city = "Vinnytsia"
+        name = name.replace("Vinnitsa", "Vinnytsia")
         
         clean_name = clean_text(name)
         display_text = ""
@@ -536,6 +548,7 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
+
 
 
 
