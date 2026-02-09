@@ -241,6 +241,17 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
     else:
         flight_url = f"https://newsky.app/map/{fid}"
 
+    # --- ✈️ ВИЗНАЧЕННЯ ТИПУ РЕЙСУ (СМАЙЛИК) ---
+    if f.get("schedule"):
+        type_emoji = "<:schedule:1468002863740616804>"
+    else:
+        type_emoji = "<:freee:1468002913837252833>"
+
+    # --- 🌐 ВИЗНАЧЕННЯ МЕРЕЖІ (VATSIM/IVAO/OFFLINE) ---
+    net_data = f.get("network")
+    # Якщо network немає або ім'я null, то OFFLINE
+    net = (net_data.get("name") if isinstance(net_data, dict) else str(net_data)) or "OFFLINE"
+
     cs = f.get("flightNumber") or f.get("callsign") or "N/A"
     airline = f.get("airline", {}).get("icao", "")
     full_cs = f"{airline} {cs}" if airline else cs
@@ -273,19 +284,39 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
 
     if status == "Departed":
         delay = f.get("delay", 0)
+        
+        # --- 🚕 РОЗРАХУНОК TAXI TIME ---
+        taxi_str = ""
+        try:
+            # Newsky дає час у форматі ISO 8601 (наприклад, 2026-02-07T20:29:33.360Z)
+            # Беремо час відправлення від гейту і час зльоту
+            t_gate_str = f.get("depTimeAct")
+            t_air_str = f.get("takeoffTimeAct")
+            
+            if t_gate_str and t_air_str:
+                # Python < 3.11 може не розуміти "Z" в кінці, замінюємо на +00:00
+                t_gate = datetime.fromisoformat(t_gate_str.replace("Z", "+00:00"))
+                t_air = datetime.fromisoformat(t_air_str.replace("Z", "+00:00"))
+                
+                # Рахуємо різницю
+                diff = t_air - t_gate
+                taxi_min = int(diff.total_seconds() // 60)
+                taxi_str = f"🚕 **Taxi:** {taxi_min} min\n\n"
+        except Exception as e:
+            print(f"Taxi Calc Error: {e}")
+
         desc = (
             f"{dep_str}{arrow}{arr_str}\n\n"
             f"✈️ **{ac}**\n\n"
-            f"{get_timing(delay)}\n\n"
+            f"{get_timing(delay)}\n" # Тут On time / Delay
+            f"{taxi_str}"            # Тут Taxi: X min (якщо є)
             f"👨‍✈️ **{pilot}**\n\n"
+            f"🌐 **{net.upper()}**\n\n" # <-- ДОДАНО ТУТ
             f"{payload_str}"
         )
-        embed = discord.Embed(title=f"🛫 {full_cs} departed", url=flight_url, description=desc, color=0x3498db)
+        embed = discord.Embed(title=f"{type_emoji} 🛫 {full_cs} departed", url=flight_url, description=desc, color=0x3498db)
 
     elif status == "Completed":
-        net_data = f.get("network")
-        net = (net_data.get("name") if isinstance(net_data, dict) else str(net_data)) or "OFFLINE"
-        
         t = f.get("result", {}).get("totals", {})
         dist = t.get("distance", 0)
         ftime = t.get("time", 0)
@@ -308,7 +339,7 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             check_g = float(f["landing"].get("gForce", 0))
             check_fpm = int(f["landing"].get("rate", 0) or f["landing"].get("touchDownRate", 0))
 
-        title_text = f"😎 {full_cs} completed"
+        title_text = f"{type_emoji} 😎 {full_cs} completed"
         color_code = 0x2ecc71
         rating_str = f"{get_rating_square(rating)} **{rating}**"
 
@@ -319,14 +350,14 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         time_info_str = f"{get_timing(delay)}\n\n"
 
         if is_hard_crash: 
-            title_text = f"💥 {full_cs} CRASHED"
+            title_text = f"{type_emoji} 💥 {full_cs} CRASHED"
             color_code = 0x992d22 
             rating_str = "💀 **CRASH**"
             formatted_balance = "-1.000.000" # Жорстка заміна балансу при краші
             time_info_str = "" # При краші видаляємо рядок затримки
         
         elif f.get("emergency") is True or (raw_balance == 0 and dist > 1):
-            title_text = f"⚠️ {full_cs} EMERGENCY"
+            title_text = f"{type_emoji} ⚠️ {full_cs} EMERGENCY"
             color_code = 0xe67e22 
             rating_str = "🟥 **EMEG**"
             
@@ -426,14 +457,20 @@ async def on_message(message):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         msg = await message.channel.send("🔄 **Checking Systems...**")
         api_status = "❌ API Error"
+        flights_count = 0 # Лічильник рейсів
+        
         async with aiohttp.ClientSession() as session:
             test = await fetch_api(session, "/flights/ongoing")
-            if test is not None: api_status = "✅ Connected to Newsky"
+            if test is not None: 
+                api_status = "✅ Connected to Newsky"
+                if "results" in test:
+                    flights_count = len(test["results"])
         
         launch_str = START_TIME.strftime("%d-%m-%Y %H:%M:%S UTC")
 
         embed = discord.Embed(title="🤖 Bot System Status", color=0x2ecc71)
         embed.add_field(name="📡 Newsky API", value=api_status, inline=False)
+        embed.add_field(name="✈️ Active Flights", value=f"**{flights_count}** tracking", inline=False)
         embed.add_field(name="🌍 Airports DB", value=f"✅ Loaded ({len(AIRPORTS_DB)} airports)", inline=False)
         embed.add_field(name="📶 Discord Ping", value=f"**{round(client.latency * 1000)}ms**", inline=False)
         embed.add_field(name="🚀 Launched at", value=f"`{launch_str}`", inline=False)
@@ -548,7 +585,3 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
-
-
-
-
