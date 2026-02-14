@@ -239,7 +239,7 @@ async def fetch_api(session, path, method="GET", body=None):
 # ---------- MESSAGE GENERATOR ----------
 async def send_flight_message(channel, status, f, details_type="ongoing"):
     fid = f.get("_id") or f.get("id") or "test_id"
-    if status == "Completed":
+    if status == "Completed" or status == "Cancelled":
         flight_url = f"https://newsky.app/flight/{fid}"
     else:
         flight_url = f"https://newsky.app/map/{fid}"
@@ -380,6 +380,31 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         )
         embed = discord.Embed(title=title_text, url=flight_url, description=desc, color=color_code)
 
+    # --- ⚫ НОВЕ: Сповіщення про скасований рейс ---
+    elif status == "Cancelled":
+        flight_duration = 0
+        if f.get("durationAct"):
+            flight_duration = f.get("durationAct")
+        elif f.get("takeoffTimeAct") and f.get("lastState", {}).get("timestamp"):
+            # Пробуємо вирахувати час польоту до обриву
+            try:
+                takeoff = datetime.fromisoformat(f.get("takeoffTimeAct").replace("Z", "+00:00"))
+                last_ping = datetime.fromtimestamp(f["lastState"]["timestamp"] / 1000, tz=timezone.utc)
+                flight_duration = int((last_ping - takeoff).total_seconds() // 60)
+            except: pass
+
+        desc = (
+            f"{dep_str}{arrow}{arr_str}\n\n"
+            f"✈️ **{ac}**\n\n"
+            f"📍 **Status:** Flight Cancelled / Connection Lost\n"
+            f"⏱️ **Flight time:** ~{flight_duration} min\n\n"
+            f"👨‍✈️ **{pilot}**\n\n"
+            f"🌐 **{net.upper()}**\n\n"
+            f"{payload_str}"
+        )
+        # Використовуємо темно-сірий колір (0x2b2d31) або просто чорний
+        embed = discord.Embed(title=f"⚫ {full_cs} flight cancelled", url=flight_url, description=desc, color=0x2b2d31)
+
     if embed:
         await channel.send(embed=embed)
 
@@ -407,31 +432,34 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
 
-    # --- 📢 НОВА ФІШКА: ПУБЛІКАЦІЯ ЧЕРЕЗ ПП (DMs) ---
-    if isinstance(message.channel, discord.DMChannel) and is_admin:
-        if not message.content and not message.attachments: return
+    # --- 📢 НОВА КОМАНДА: !msg <text> ---
+    if message.content.startswith("!msg"):
+        # 1. Перевіряємо права
+        if not is_admin: 
+            return await message.channel.send("🚫 **Access Denied**")
         
+        # 2. Отримуємо текст (відрізаємо перші 5 символів "!msg ")
+        content = message.content[5:].strip()
+        
+        if not content:
+            return await message.channel.send("⚠️ Usage: `!msg Ваш текст повідомлення`")
+        
+        # 3. Шукаємо канал
         target_channel = client.get_channel(CHANNEL_ID)
+        
         if target_channel:
-            # Створюємо гарний Embed
-            embed = discord.Embed(description=message.content, color=0x2b2d31)
-            embed.set_author(name="Airline Announcement", icon_url=client.user.avatar.url if client.user.avatar else None)
-            
-            # Якщо є картинка - додаємо її
-            if message.attachments:
-                embed.set_image(url=message.attachments[0].url)
-                
-            await target_channel.send(embed=embed)
-            await message.channel.send("✅ **Повідомлення надіслано в канал польотів!**")
+            # 4. Надсилаємо ЗВИЧАЙНИЙ ТЕКСТ
+            await target_channel.send(content)
+            await message.channel.send(f"✅ **Повідомлення надіслано:**\n{content}")
         else:
             await message.channel.send("❌ **Помилка:** Не знайдено канал (перевір CHANNEL_ID)")
         return
-    # ------------------------------------------------
+    # ------------------------------------
 
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
-        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n\n"
+        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!msg <text>`** — Send text to main channel\n\n"
         desc += "**🎭 Status Management (Admin):**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Save & Add status\n**`!delstatus [num]`** — Delete status\n"
         embed.description = desc
         await message.channel.send(embed=embed)
@@ -575,18 +603,32 @@ async def main_loop():
                             state.setdefault(fid, {})["completed"] = True
                             continue
                         if fid in state and state[fid].get("completed"): continue
-                        if not raw_f.get("close"): continue
+                        
+                        # --- 🆕 ЛОГІКА ДЛЯ ВИДАЛЕНИХ РЕЙСІВ ---
+                        # Якщо є 'close' - це звичайне завершення
+                        if raw_f.get("close"):
+                            det = await fetch_api(session, f"/flight/{fid}")
+                            if not det or "flight" not in det: continue
+                            f = det["flight"]
+                            cs = f.get("flightNumber") or f.get("callsign") or "N/A"
+                            if cs == "N/A": continue
 
-                        det = await fetch_api(session, f"/flight/{fid}")
-                        if not det or "flight" not in det: continue
-                        f = det["flight"]
-                        cs = f.get("flightNumber") or f.get("callsign") or "N/A"
-                        if cs == "N/A": continue
+                            await send_flight_message(channel, "Completed", f, "result")
+                            state.setdefault(fid, {})["completed"] = True
+                            print(f"✅ Report Sent: {cs}")
+                        
+                        # Якщо немає 'close', але є 'deleted' - рейс скасовано/видалено
+                        elif raw_f.get("deleted"):
+                            det = await fetch_api(session, f"/flight/{fid}")
+                            if not det or "flight" not in det: continue
+                            f = det["flight"]
+                            cs = f.get("flightNumber") or f.get("callsign") or "N/A"
+                            if cs == "N/A": continue
 
-                        await send_flight_message(channel, "Completed", f, "result")
-                        state.setdefault(fid, {})["completed"] = True
-                        print(f"✅ Report Sent: {cs}")
-                
+                            await send_flight_message(channel, "Cancelled", f, "ongoing")
+                            state.setdefault(fid, {})["completed"] = True
+                            print(f"⚫ Cancel Report Sent: {cs}")
+
                 if first_run:
                     print("🔕 First run sync complete. No spam.")
                     first_run = False
