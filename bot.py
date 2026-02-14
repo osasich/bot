@@ -150,6 +150,9 @@ def format_airport_string(icao, api_name):
 
         if city.lower() == "zaporizhia": city = "Zaporizhzhia"
         name = name.replace("Zaporizhia", "Zaporizhzhia")
+
+        if city.lower() == "larnarca": city = "Larnaca"
+        name = name.replace("Larnarca", "Larnaca")
         
         clean_name = clean_text(name)
         display_text = ""
@@ -651,3 +654,4 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
+
