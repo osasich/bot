@@ -407,6 +407,27 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
 
+    # --- 📢 НОВА ФІШКА: ПУБЛІКАЦІЯ ЧЕРЕЗ ПП (DMs) ---
+    if isinstance(message.channel, discord.DMChannel) and is_admin:
+        if not message.content and not message.attachments: return
+        
+        target_channel = client.get_channel(CHANNEL_ID)
+        if target_channel:
+            # Створюємо гарний Embed
+            embed = discord.Embed(description=message.content, color=0x2b2d31)
+            embed.set_author(name="Airline Announcement", icon_url=client.user.avatar.url if client.user.avatar else None)
+            
+            # Якщо є картинка - додаємо її
+            if message.attachments:
+                embed.set_image(url=message.attachments[0].url)
+                
+            await target_channel.send(embed=embed)
+            await message.channel.send("✅ **Повідомлення надіслано в канал польотів!**")
+        else:
+            await message.channel.send("❌ **Помилка:** Не знайдено канал (перевір CHANNEL_ID)")
+        return
+    # ------------------------------------------------
+
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
@@ -588,4 +609,3 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
-
