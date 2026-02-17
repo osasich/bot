@@ -435,34 +435,54 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
 
-    # --- 📢 НОВА КОМАНДА: !msg <text> ---
+    # --- 📢 ОНОВЛЕНА КОМАНДА: !msg [optional:#channel] <text> ---
     if message.content.startswith("!msg"):
         # 1. Перевіряємо права
         if not is_admin: 
             return await message.channel.send("🚫 **Access Denied**")
         
-        # 2. Отримуємо текст (відрізаємо перші 5 символів "!msg ")
-        content = message.content[5:].strip()
+        # 2. Розбираємо команду
+        parts = message.content.split()
+        if len(parts) < 2:
+            return await message.channel.send("⚠️ Usage: `!msg [#channel] text` or `!msg text`")
+        
+        # За замовчуванням беремо головний канал
+        target_channel = client.get_channel(CHANNEL_ID)
+        content_start_index = 1
+        
+        # 3. Перевіряємо, чи є перший аргумент каналом
+        if message.channel_mentions:
+            # Якщо користувач тегнув канал, беремо перший з них
+            # Перевіряємо, чи тег стоїть саме на першому місці після команди
+            first_arg = parts[1]
+            if first_arg.startswith("<#") and first_arg.endswith(">"):
+                target_channel = message.channel_mentions[0]
+                content_start_index = 2 # Текст починається після каналу
+
+        # 4. Формуємо текст повідомлення
+        content = " ".join(parts[content_start_index:])
         
         if not content:
-            return await message.channel.send("⚠️ Usage: `!msg Ваш текст повідомлення`")
-        
-        # 3. Шукаємо канал
-        target_channel = client.get_channel(CHANNEL_ID)
-        
+            return await message.channel.send("⚠️ Cannot send empty message.")
+            
         if target_channel:
-            # 4. Надсилаємо ЗВИЧАЙНИЙ ТЕКСТ
+            # Перевіряємо права бота в цьому каналі
+            permissions = target_channel.permissions_for(message.guild.me)
+            if not permissions.send_messages:
+                 return await message.channel.send(f"❌ **Error:** I don't have permission to send messages in {target_channel.mention}")
+
+            # 5. Надсилаємо ЗВИЧАЙНИЙ ТЕКСТ
             await target_channel.send(content)
-            await message.channel.send(f"✅ **Повідомлення надіслано:**\n{content}")
+            await message.channel.send(f"✅ **Sent to {target_channel.mention}:**\n{content}")
         else:
-            await message.channel.send("❌ **Помилка:** Не знайдено канал (перевір CHANNEL_ID)")
+            await message.channel.send("❌ **Error:** Default channel not found (check CHANNEL_ID)")
         return
     # ------------------------------------
 
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
-        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!msg <text>`** — Send text to main channel\n\n"
+        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!msg [#channel] <text>`** — Send text message\n\n"
         desc += "**🎭 Status Management (Admin):**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Save & Add status\n**`!delstatus [num]`** — Delete status\n"
         embed.description = desc
         await message.channel.send(embed=embed)
@@ -654,4 +674,3 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
-
