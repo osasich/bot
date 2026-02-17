@@ -439,7 +439,54 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
     
-    # --- 🔄 НОВА КОМАНДА: !undo (ВИДАЛИТИ ОСТАННЄ) ---
+    # --- 👹 НОВА КОМАНДА: !wow <ID> <EMOJI> (СТАВИТИ РЕАКЦІЮ) ---
+    if message.content.startswith("!wow"):
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+        parts = message.content.split()
+        if len(parts) < 3:
+            return await message.channel.send("⚠️ Usage: `!wow <Message_ID> <Emoji>`")
+        
+        target_id = parts[1]
+        emoji = parts[2]
+        
+        if not target_id.isdigit():
+             return await message.channel.send("⚠️ ID must be a number.")
+
+        found_message = None
+        
+        # 1. Спробуємо знайти в головному каналі (найшвидше)
+        main_channel = client.get_channel(CHANNEL_ID)
+        if main_channel:
+            try:
+                found_message = await main_channel.fetch_message(int(target_id))
+            except:
+                pass
+        
+        # 2. Якщо не знайшли - шукаємо по всіх каналах (повільніше, але знайде всюди)
+        if not found_message:
+            await message.channel.send("🔍 **Searching for message...**")
+            for guild in client.guilds:
+                for channel in guild.text_channels:
+                    if channel.id == CHANNEL_ID: continue # Вже перевірили
+                    try:
+                        found_message = await channel.fetch_message(int(target_id))
+                        if found_message: break
+                    except:
+                        continue
+                if found_message: break
+        
+        if found_message:
+            try:
+                await found_message.add_reaction(emoji)
+                await message.channel.send(f"✅ **Reacted {emoji} to message in {found_message.channel.mention}**")
+            except Exception as e:
+                await message.channel.send(f"❌ **Error adding reaction:** {e}")
+        else:
+            await message.channel.send("❌ **Message not found.** (Check ID or bot permissions)")
+        return
+    # -------------------------------------------------------------
+
+    # --- 🔄 КОМАНДА: !undo (ВИДАЛИТИ ОСТАННЄ) ---
     if message.content == "!undo":
         if not is_admin: 
             return await message.channel.send("🚫 **Access Denied**")
@@ -514,7 +561,7 @@ async def on_message(message):
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
-        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!msg [ID] <text>`** — Send text message\n**`!undo`** — Delete last !msg\n\n"
+        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!msg [ID] <text>`** — Send text message\n**`!undo`** — Delete last !msg\n**`!wow <ID> <emoji>`** — React to message\n\n"
         desc += "**🎭 Status Management (Admin):**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Save & Add status\n**`!delstatus [num]`** — Delete status\n"
         embed.description = desc
         await message.channel.send(embed=embed)
