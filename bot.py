@@ -439,7 +439,7 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
     
-    # --- 👹 НОВА КОМАНДА: !wow <ID> <EMOJI> (СТАВИТИ РЕАКЦІЮ) ---
+    # --- 👹 КОМАНДА: !wow <ID> <EMOJI> (СТАВИТИ РЕАКЦІЮ) ---
     if message.content.startswith("!wow"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         parts = message.content.split()
@@ -462,7 +462,7 @@ async def on_message(message):
             except:
                 pass
         
-        # 2. Якщо не знайшли - шукаємо по всіх каналах (повільніше, але знайде всюди)
+        # 2. Якщо не знайшли - шукаємо по всіх каналах
         if not found_message:
             await message.channel.send("🔍 **Searching for message...**")
             for guild in client.guilds:
@@ -709,6 +709,10 @@ async def main_loop():
                         # --- 🆕 ЛОГІКА ДЛЯ ВИДАЛЕНИХ РЕЙСІВ ---
                         # Якщо є 'close' - це звичайне завершення
                         if raw_f.get("close"):
+                            print(f"⏳ Waiting for calculation: {fid}")
+                            # 🔥 ЧЕКАЄМО 10 СЕКУНД, ПОКИ СЕРВЕР ПОРАХУЄ (ЩОБ НЕ БУЛО 0) 🔥
+                            await asyncio.sleep(10)
+                            
                             det = await fetch_api(session, f"/flight/{fid}")
                             if not det or "flight" not in det: continue
                             f = det["flight"]
