@@ -40,6 +40,8 @@ client = discord.Client(intents=intents)
 AIRPORTS_DB = {}
 # 🔥 Глобальна змінна-запобіжник від дублікатів
 MONITORING_STARTED = False
+# 🆕 Змінна для збереження останнього повідомлення
+last_sent_message = None
 
 # --- 🎭 СТАНДАРТНІ СТАТУСИ ---
 DEFAULT_STATUSES = [
@@ -428,65 +430,91 @@ async def status_loop():
 
 @client.event
 async def on_message(message):
+    global last_sent_message
+    
     if message.author == client.user: return
     is_admin = False
     if message.author.id in ADMIN_IDS:
         is_admin = True
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
-
-    # --- 📢 ОНОВЛЕНА КОМАНДА: !msg [ID] <text> ---
-    if message.content.startswith("!msg"):
-        # 1. Перевіряємо права
+    
+    # --- 🔄 НОВА КОМАНДА: !undo (ВИДАЛИТИ ОСТАННЄ) ---
+    if message.content == "!undo":
         if not is_admin: 
             return await message.channel.send("🚫 **Access Denied**")
         
-        # 2. Розбираємо команду
+        if last_sent_message:
+            try:
+                # Видаляємо повідомлення
+                await last_sent_message.delete()
+                await message.channel.send("🗑️ **Last !msg deleted.**")
+                last_sent_message = None # Очищаємо змінну
+            except discord.NotFound:
+                await message.channel.send("⚠️ **Message already deleted or not found.**")
+                last_sent_message = None
+            except discord.Forbidden:
+                await message.channel.send("❌ **Error:** I don't have permission to delete it.")
+        else:
+            await message.channel.send("⚠️ **Nothing to undo.** (I only remember the last `!msg`)")
+        return
+    # ------------------------------------------------
+
+    # --- 📢 КОМАНДА: !msg [ID] <text> (ЗІ ЗБЕРЕЖЕННЯМ) ---
+    if message.content.startswith("!msg"):
+        if not is_admin: 
+            return await message.channel.send("🚫 **Access Denied**")
+        
         parts = message.content.split()
         if len(parts) < 2:
             return await message.channel.send("⚠️ Usage: `!msg [Channel_ID] text` or `!msg text`")
         
-        # За замовчуванням - головний канал
         target_channel = client.get_channel(CHANNEL_ID)
         content_start_index = 1
         
-        # 3. Перевіряємо, чи є перший аргумент ЦИФРАМИ (ID каналу)
+        # 1. Перевіряємо, чи друге слово - це ID
         potential_id = parts[1]
         
-        if potential_id.isdigit():
-            # Це схоже на ID, пробуємо знайти канал
+        # Якщо це схоже на ID каналу (тільки цифри і довше 15 символів)
+        if potential_id.isdigit() and len(potential_id) > 15:
             try:
-                found_channel = client.get_channel(int(potential_id))
+                # 2. Жорсткий пошук через API
+                found_channel = await client.fetch_channel(int(potential_id))
                 if found_channel:
                     target_channel = found_channel
                     content_start_index = 2 # Текст починається після ID
-            except: 
-                pass # Якщо не вийшло - це просто текст, шлемо в дефолтний
+            except discord.NotFound:
+                return await message.channel.send(f"❌ **Error:** Channel with ID `{potential_id}` not found.")
+            except discord.Forbidden:
+                return await message.channel.send(f"❌ **Error:** I see channel `{potential_id}`, but I don't have permission to write there.")
+            except Exception as e:
+                # Якщо помилка інша - значить це не ID, а просто текст з цифр
+                pass
 
-        # 4. Формуємо текст повідомлення
+        # 3. Формуємо текст
         content = " ".join(parts[content_start_index:])
         
         if not content:
             return await message.channel.send("⚠️ Empty message.")
         
-        # 5. Спроба відправки
+        # 4. Відправка і збереження
         if target_channel:
             try:
-                await target_channel.send(content)
+                sent_msg = await target_channel.send(content) # 🔥 Зберігаємо об'єкт повідомлення
+                last_sent_message = sent_msg # 🔥 Записуємо в глобальну змінну
+                
                 await message.channel.send(f"✅ **Sent to {target_channel.mention}:**\n{content}")
-            except discord.Forbidden:
-                await message.channel.send(f"❌ **Error:** I don't have permission to write in {target_channel.mention}")
             except Exception as e:
                 await message.channel.send(f"❌ **Error:** {e}")
         else:
-            await message.channel.send("❌ **Error:** Channel not found. Check ID or Default CHANNEL_ID.")
+            await message.channel.send("❌ **Error:** Default channel not found (check CHANNEL_ID)")
         return
-    # ------------------------------------
+    # ------------------------------------------------------------
 
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
-        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!msg [ID] <text>`** — Send text message\n\n"
+        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!msg [ID] <text>`** — Send text message\n**`!undo`** — Delete last !msg\n\n"
         desc += "**🎭 Status Management (Admin):**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Save & Add status\n**`!delstatus [num]`** — Delete status\n"
         embed.description = desc
         await message.channel.send(embed=embed)
