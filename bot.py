@@ -435,7 +435,7 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
 
-    # --- 📢 ОНОВЛЕНА КОМАНДА: !msg [optional:#channel] <text> ---
+    # --- 📢 ОНОВЛЕНА КОМАНДА: !msg [ID] <text> ---
     if message.content.startswith("!msg"):
         # 1. Перевіряємо права
         if not is_admin: 
@@ -444,45 +444,49 @@ async def on_message(message):
         # 2. Розбираємо команду
         parts = message.content.split()
         if len(parts) < 2:
-            return await message.channel.send("⚠️ Usage: `!msg [#channel] text` or `!msg text`")
+            return await message.channel.send("⚠️ Usage: `!msg [Channel_ID] text` or `!msg text`")
         
-        # За замовчуванням беремо головний канал
+        # За замовчуванням - головний канал
         target_channel = client.get_channel(CHANNEL_ID)
         content_start_index = 1
         
-        # 3. Перевіряємо, чи є перший аргумент каналом
-        if message.channel_mentions:
-            # Якщо користувач тегнув канал, беремо перший з них
-            # Перевіряємо, чи тег стоїть саме на першому місці після команди
-            first_arg = parts[1]
-            if first_arg.startswith("<#") and first_arg.endswith(">"):
-                target_channel = message.channel_mentions[0]
-                content_start_index = 2 # Текст починається після каналу
+        # 3. Перевіряємо, чи є перший аргумент ЦИФРАМИ (ID каналу)
+        potential_id = parts[1]
+        
+        if potential_id.isdigit():
+            # Це схоже на ID, пробуємо знайти канал
+            try:
+                found_channel = client.get_channel(int(potential_id))
+                if found_channel:
+                    target_channel = found_channel
+                    content_start_index = 2 # Текст починається після ID
+            except: 
+                pass # Якщо не вийшло - це просто текст, шлемо в дефолтний
 
         # 4. Формуємо текст повідомлення
         content = " ".join(parts[content_start_index:])
         
         if not content:
-            return await message.channel.send("⚠️ Cannot send empty message.")
-            
+            return await message.channel.send("⚠️ Empty message.")
+        
+        # 5. Спроба відправки
         if target_channel:
-            # Перевіряємо права бота в цьому каналі
-            permissions = target_channel.permissions_for(message.guild.me)
-            if not permissions.send_messages:
-                 return await message.channel.send(f"❌ **Error:** I don't have permission to send messages in {target_channel.mention}")
-
-            # 5. Надсилаємо ЗВИЧАЙНИЙ ТЕКСТ
-            await target_channel.send(content)
-            await message.channel.send(f"✅ **Sent to {target_channel.mention}:**\n{content}")
+            try:
+                await target_channel.send(content)
+                await message.channel.send(f"✅ **Sent to {target_channel.mention}:**\n{content}")
+            except discord.Forbidden:
+                await message.channel.send(f"❌ **Error:** I don't have permission to write in {target_channel.mention}")
+            except Exception as e:
+                await message.channel.send(f"❌ **Error:** {e}")
         else:
-            await message.channel.send("❌ **Error:** Default channel not found (check CHANNEL_ID)")
+            await message.channel.send("❌ **Error:** Channel not found. Check ID or Default CHANNEL_ID.")
         return
     # ------------------------------------
 
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
-        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!msg [#channel] <text>`** — Send text message\n\n"
+        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!msg [ID] <text>`** — Send text message\n\n"
         desc += "**🎭 Status Management (Admin):**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Save & Add status\n**`!delstatus [num]`** — Delete status\n"
         embed.description = desc
         await message.channel.send(embed=embed)
