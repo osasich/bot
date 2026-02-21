@@ -732,13 +732,23 @@ async def main_loop():
                     print(f"📡 Tracking {len(ongoing['results'])} flights...", end='\r')
                     for raw_f in ongoing["results"]:
                         fid = str(raw_f.get("_id") or raw_f.get("id"))
+                        
+                        state.setdefault(fid, {})
+                        
+                        # --- 1. ЛІНИВА ПЕРЕВІРКА ---
+                        # Якщо про зліт вже повідомляли, ігноруємо і не робимо зайвий запит
+                        if state[fid].get("takeoff"):
+                            continue
+                            
+                        # --- 2. ШТУЧНА ЧЕРГА (ТРОТТЛІНГ) ---
+                        # Захист від Rate Limit (5 запитів на 10 сек)
+                        await asyncio.sleep(2.5)
+                        
                         det = await fetch_api(session, f"/flight/{fid}")
                         if not det or "flight" not in det: continue
                         f = det["flight"]
                         cs = f.get("flightNumber") or f.get("callsign") or "N/A"
                         if cs == "N/A": continue
-                        
-                        state.setdefault(fid, {})
                         
                         if f.get("takeoffTimeAct") and not state[fid].get("takeoff"):
                             await send_flight_message(channel, "Departed", f, "ongoing")
@@ -753,7 +763,7 @@ async def main_loop():
                             continue
                         if fid in state and state[fid].get("completed"): continue
                         
-                        # --- 🆕 ЛОГІКА ДЛЯ ВИДАЛЕНИХ РЕЙСІВ ---
+                        # --- ЛОГІКА ДЛЯ ЗАКРИТИХ ТА ВИДАЛЕНИХ РЕЙСІВ ---
                         # Якщо є 'close' - це звичайне завершення
                         if raw_f.get("close"):
                             print(f"⏳ Waiting for calculation: {fid}")
@@ -772,6 +782,9 @@ async def main_loop():
                         
                         # Якщо немає 'close', але є 'deleted' - рейс скасовано/видалено
                         elif raw_f.get("deleted"):
+                            # Штучна черга для скасованих
+                            await asyncio.sleep(2.5)
+                            
                             det = await fetch_api(session, f"/flight/{fid}")
                             if not det or "flight" not in det: continue
                             f = det["flight"]
