@@ -43,15 +43,6 @@ MONITORING_STARTED = False
 # 🆕 Змінна для збереження останнього повідомлення
 last_sent_message = None
 
-# --- 🎭 СТАНДАРТНІ СТАТУСИ ---
-DEFAULT_STATUSES = [
-    {"type": "play", "name": "🕹️Tracking with Newsky.app"},
-    {"type": "play", "name": "🕹️Playing AirportSim"},
-    {"type": "play", "name": "✈️Playing Microsoft Flight Simulator 2024"},
-    {"type": "listen", "name": "🎧LiveATC @ KBP"},
-    {"type": "watch", "name": "🔴Watching Youtube KAZUAR AVIA"}
-]
-
 # ---------- ДОПОМІЖНІ ФУНКЦІЇ ----------
 def load_state():
     if not STATE_FILE.exists(): return {}
@@ -63,6 +54,15 @@ def save_state(state):
         if len(state) > 100: state = dict(list(state.items())[-50:])
         STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
     except: pass
+
+# --- 🎭 СТАНДАРТНІ СТАТУСИ ---
+DEFAULT_STATUSES = [
+    {"type": "play", "name": "🕹️Tracking with Newsky.app"},
+    {"type": "play", "name": "🕹️Playing AirportSim"},
+    {"type": "play", "name": "✈️Playing Microsoft Flight Simulator 2024"},
+    {"type": "listen", "name": "🎧LiveATC @ KBP"},
+    {"type": "watch", "name": "🔴Watching Youtube KAZUAR AVIA"}
+]
 
 def load_statuses():
     if not STATUS_FILE.exists():
@@ -302,11 +302,8 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             t_air_str = f.get("takeoffTimeAct")
             
             if t_gate_str and t_air_str:
-                # Python < 3.11 може не розуміти "Z" в кінці, замінюємо на +00:00
                 t_gate = datetime.fromisoformat(t_gate_str.replace("Z", "+00:00"))
                 t_air = datetime.fromisoformat(t_air_str.replace("Z", "+00:00"))
-                
-                # Рахуємо різницю
                 diff = t_air - t_gate
                 taxi_min = int(diff.total_seconds() // 60)
                 taxi_str = f"🚕 **Taxi:** {taxi_min} min\n\n"
@@ -316,10 +313,10 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         desc = (
             f"{dep_str}{arrow}{arr_str}\n\n"
             f"✈️ **{ac}**\n\n"
-            f"{get_timing(delay)}\n" # Тут On time / Delay
-            f"{taxi_str}"            # Тут Taxi: X min (якщо є)
+            f"{get_timing(delay)}\n" 
+            f"{taxi_str}"            
             f"👨‍✈️ **{pilot}**\n\n"
-            f"🌐 **{net.upper()}**\n\n" # <-- ДОДАНО ТУТ
+            f"🌐 **{net.upper()}**\n\n"
             f"{payload_str}"
         )
         embed = discord.Embed(title=f"{type_emoji} 🛫 {full_cs} departed", url=flight_url, description=desc, color=0x3498db)
@@ -354,15 +351,14 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         # 🔥 Перевірка на краш (3G або 2000fpm) має пріоритет над Emergency 🔥
         is_hard_crash = abs(check_g) > 3.0 or abs(check_fpm) > 2000
         
-        # --- ФОРМУВАННЯ РЯДКА ЧАСУ (Delay / On Time) ---
         time_info_str = f"{get_timing(delay)}\n\n"
 
         if is_hard_crash: 
             title_text = f"{type_emoji} 💥 {full_cs} CRASHED"
             color_code = 0x992d22 
             rating_str = "💀 **CRASH**"
-            formatted_balance = "-1.000.000" # Жорстка заміна балансу при краші
-            time_info_str = "" # При краші видаляємо рядок затримки
+            formatted_balance = "-1.000.000" 
+            time_info_str = "" 
         
         elif f.get("emergency") is True or (raw_balance == 0 and dist > 1):
             title_text = f"{type_emoji} ⚠️ {full_cs} EMERGENCY"
@@ -385,13 +381,11 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
         )
         embed = discord.Embed(title=title_text, url=flight_url, description=desc, color=color_code)
 
-    # --- ⚫ НОВЕ: Сповіщення про скасований рейс ---
     elif status == "Cancelled":
         flight_duration = 0
         if f.get("durationAct"):
             flight_duration = f.get("durationAct")
         elif f.get("takeoffTimeAct") and f.get("lastState", {}).get("timestamp"):
-            # Пробуємо вирахувати час польоту до обриву
             try:
                 takeoff = datetime.fromisoformat(f.get("takeoffTimeAct").replace("Z", "+00:00"))
                 last_ping = datetime.fromtimestamp(f["lastState"]["timestamp"] / 1000, tz=timezone.utc)
@@ -407,7 +401,6 @@ async def send_flight_message(channel, status, f, details_type="ongoing"):
             f"🌐 **{net.upper()}**\n\n"
             f"{payload_str}"
         )
-        # Використовуємо темно-сірий колір (0x2b2d31) або просто чорний
         embed = discord.Embed(title=f"⚫ {full_cs} flight cancelled", url=flight_url, description=desc, color=0x2b2d31)
 
     if embed:
@@ -439,6 +432,20 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
     
+    # --- 📥 КОМАНДА: !cache (СКАЧАТИ ФАЙЛ ПАМ'ЯТІ) ---
+    if message.content == "!cache":
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+        
+        if not STATE_FILE.exists() or os.path.getsize(STATE_FILE) == 0:
+            return await message.channel.send("⚠️ **Cache file (sent.json) is empty or does not exist yet.**")
+            
+        await message.channel.send(
+            content="📂 **Bot Memory File (sent.json):**", 
+            file=discord.File(STATE_FILE)
+        )
+        return
+    # --------------------------------------------------------
+
     # --- 👹 КОМАНДА: !wow <ID> <EMOJI> (СТАВИТИ РЕАКЦІЮ) ---
     if message.content.startswith("!wow"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
@@ -454,7 +461,6 @@ async def on_message(message):
 
         found_message = None
         
-        # 1. Спробуємо знайти в головному каналі (найшвидше)
         main_channel = client.get_channel(CHANNEL_ID)
         if main_channel:
             try:
@@ -462,12 +468,11 @@ async def on_message(message):
             except:
                 pass
         
-        # 2. Якщо не знайшли - шукаємо по всіх каналах
         if not found_message:
             await message.channel.send("🔍 **Searching for message...**")
             for guild in client.guilds:
                 for channel in guild.text_channels:
-                    if channel.id == CHANNEL_ID: continue # Вже перевірили
+                    if channel.id == CHANNEL_ID: continue
                     try:
                         found_message = await channel.fetch_message(int(target_id))
                         if found_message: break
@@ -486,7 +491,7 @@ async def on_message(message):
         return
     # -------------------------------------------------------------
 
-    # --- 🗑️ НОВА КОМАНДА: !unwow <ID> <EMOJI> (ПРИБРАТИ РЕАКЦІЮ) ---
+    # --- 🗑️ КОМАНДА: !unwow <ID> <EMOJI> (ПРИБРАТИ РЕАКЦІЮ) ---
     if message.content.startswith("!unwow"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         parts = message.content.split()
@@ -501,7 +506,6 @@ async def on_message(message):
 
         found_message = None
         
-        # 1. Спробуємо знайти в головному каналі (найшвидше)
         main_channel = client.get_channel(CHANNEL_ID)
         if main_channel:
             try:
@@ -509,12 +513,11 @@ async def on_message(message):
             except:
                 pass
         
-        # 2. Якщо не знайшли - шукаємо по всіх каналах
         if not found_message:
             await message.channel.send("🔍 **Searching for message...**")
             for guild in client.guilds:
                 for channel in guild.text_channels:
-                    if channel.id == CHANNEL_ID: continue # Вже перевірили
+                    if channel.id == CHANNEL_ID: continue
                     try:
                         found_message = await channel.fetch_message(int(target_id))
                         if found_message: break
@@ -533,6 +536,54 @@ async def on_message(message):
         return
     # -------------------------------------------------------------
 
+    # --- 💬 НОВА КОМАНДА: !reply <ID> <text> (ВІДПОВІСТИ НА ПОВІДОМЛЕННЯ) ---
+    if message.content.startswith("!reply"):
+        if not is_admin: 
+            return await message.channel.send("🚫 **Access Denied**")
+        
+        parts = message.content.split()
+        if len(parts) < 3:
+            return await message.channel.send("⚠️ Usage: `!reply <Message_ID> <text>`")
+        
+        target_id = parts[1]
+        
+        if not target_id.isdigit():
+             return await message.channel.send("⚠️ ID must be a number.")
+
+        content = " ".join(parts[2:])
+        found_message = None
+        
+        main_channel = client.get_channel(CHANNEL_ID)
+        if main_channel:
+            try:
+                found_message = await main_channel.fetch_message(int(target_id))
+            except:
+                pass
+        
+        if not found_message:
+            await message.channel.send("🔍 **Searching for message to reply to...**")
+            for guild in client.guilds:
+                for channel in guild.text_channels:
+                    if channel.id == CHANNEL_ID: continue
+                    try:
+                        found_message = await channel.fetch_message(int(target_id))
+                        if found_message: break
+                    except:
+                        continue
+                if found_message: break
+        
+        if found_message:
+            try:
+                sent_msg = await found_message.reply(content)
+                last_sent_message = sent_msg # 🔥 Зберігаємо для команди !undo
+                await message.channel.send(f"✅ **Replied to message in {found_message.channel.mention}:**\n{content}")
+            except Exception as e:
+                await message.channel.send(f"❌ **Error replying:** {e}")
+        else:
+            await message.channel.send("❌ **Message not found.** (Check ID or bot permissions)")
+        return
+    # -------------------------------------------------------------
+
     # --- 🔄 КОМАНДА: !undo (ВИДАЛИТИ ОСТАННЄ) ---
     if message.content == "!undo":
         if not is_admin: 
@@ -540,17 +591,16 @@ async def on_message(message):
         
         if last_sent_message:
             try:
-                # Видаляємо повідомлення
                 await last_sent_message.delete()
-                await message.channel.send("🗑️ **Last !msg deleted.**")
-                last_sent_message = None # Очищаємо змінну
+                await message.channel.send("🗑️ **Last !msg or !reply deleted.**")
+                last_sent_message = None
             except discord.NotFound:
                 await message.channel.send("⚠️ **Message already deleted or not found.**")
                 last_sent_message = None
             except discord.Forbidden:
                 await message.channel.send("❌ **Error:** I don't have permission to delete it.")
         else:
-            await message.channel.send("⚠️ **Nothing to undo.** (I only remember the last `!msg`)")
+            await message.channel.send("⚠️ **Nothing to undo.** (I only remember the last `!msg` or `!reply`)")
         return
     # ------------------------------------------------
 
@@ -566,36 +616,30 @@ async def on_message(message):
         target_channel = client.get_channel(CHANNEL_ID)
         content_start_index = 1
         
-        # 1. Перевіряємо, чи друге слово - це ID
         potential_id = parts[1]
         
-        # Якщо це схоже на ID каналу (тільки цифри і довше 15 символів)
         if potential_id.isdigit() and len(potential_id) > 15:
             try:
-                # 2. Жорсткий пошук через API
                 found_channel = await client.fetch_channel(int(potential_id))
                 if found_channel:
                     target_channel = found_channel
-                    content_start_index = 2 # Текст починається після ID
+                    content_start_index = 2
             except discord.NotFound:
                 return await message.channel.send(f"❌ **Error:** Channel with ID `{potential_id}` not found.")
             except discord.Forbidden:
                 return await message.channel.send(f"❌ **Error:** I see channel `{potential_id}`, but I don't have permission to write there.")
             except Exception as e:
-                # Якщо помилка інша - значить це не ID, а просто текст з цифр
                 pass
 
-        # 3. Формуємо текст
         content = " ".join(parts[content_start_index:])
         
         if not content:
             return await message.channel.send("⚠️ Empty message.")
         
-        # 4. Відправка і збереження
         if target_channel:
             try:
-                sent_msg = await target_channel.send(content) # 🔥 Зберігаємо об'єкт повідомлення
-                last_sent_message = sent_msg # 🔥 Записуємо в глобальну змінну
+                sent_msg = await target_channel.send(content)
+                last_sent_message = sent_msg 
                 
                 await message.channel.send(f"✅ **Sent to {target_channel.mention}:**\n{content}")
             except Exception as e:
@@ -608,7 +652,7 @@ async def on_message(message):
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
         desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
-        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!msg [ID] <text>`** — Send text message\n**`!undo`** — Delete last !msg\n**`!wow <ID> <emoji>`** — React to message\n**`!unwow <ID> <emoji>`** — Remove reaction\n\n"
+        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!msg [ID] <text>`** — Send text message\n**`!reply <ID> <text>`** — Reply to a message\n**`!undo`** — Delete last !msg or !reply\n**`!wow <ID> <emoji>`** — React to message\n**`!unwow <ID> <emoji>`** — Remove reaction\n**`!cache`** — Download sent.json memory\n\n"
         desc += "**🎭 Status Management (Admin):**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Save & Add status\n**`!delstatus [num]`** — Delete status\n"
         embed.description = desc
         await message.channel.send(embed=embed)
@@ -658,7 +702,7 @@ async def on_message(message):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         msg = await message.channel.send("🔄 **Checking Systems...**")
         api_status = "❌ API Error"
-        flights_count = 0 # Лічильник рейсів
+        flights_count = 0 
         
         async with aiohttp.ClientSession() as session:
             test = await fetch_api(session, "/flights/ongoing")
@@ -736,12 +780,10 @@ async def main_loop():
                         state.setdefault(fid, {})
                         
                         # --- 1. ЛІНИВА ПЕРЕВІРКА ---
-                        # Якщо про зліт вже повідомляли, ігноруємо і не робимо зайвий запит
                         if state[fid].get("takeoff"):
                             continue
                             
                         # --- 2. ШТУЧНА ЧЕРГА (ТРОТТЛІНГ) ---
-                        # Захист від Rate Limit (5 запитів на 10 сек)
                         await asyncio.sleep(2.5)
                         
                         det = await fetch_api(session, f"/flight/{fid}")
@@ -764,15 +806,21 @@ async def main_loop():
                         if fid in state and state[fid].get("completed"): continue
                         
                         # --- ЛОГІКА ДЛЯ ЗАКРИТИХ ТА ВИДАЛЕНИХ РЕЙСІВ ---
-                        # Якщо є 'close' - це звичайне завершення
                         if raw_f.get("close"):
                             print(f"⏳ Waiting for calculation: {fid}")
-                            # 🔥 ЧЕКАЄМО 10 СЕКУНД, ПОКИ СЕРВЕР ПОРАХУЄ (ЩОБ НЕ БУЛО 0) 🔥
                             await asyncio.sleep(10)
                             
                             det = await fetch_api(session, f"/flight/{fid}")
                             if not det or "flight" not in det: continue
                             f = det["flight"]
+                            
+                            # 🔥 ФІЛЬТР ПОКИНУТИХ РЕЙСІВ (ABANDONED) 🔥
+                            t = f.get("result", {}).get("totals", {})
+                            if t.get("distance", 0) == 0 and t.get("time", 0) == 0:
+                                print(f"🙈 Ignored abandoned flight: {fid}")
+                                state.setdefault(fid, {})["completed"] = True
+                                continue
+
                             cs = f.get("flightNumber") or f.get("callsign") or "N/A"
                             if cs == "N/A": continue
 
@@ -780,9 +828,7 @@ async def main_loop():
                             state.setdefault(fid, {})["completed"] = True
                             print(f"✅ Report Sent: {cs}")
                         
-                        # Якщо немає 'close', але є 'deleted' - рейс скасовано/видалено
                         elif raw_f.get("deleted"):
-                            # Штучна черга для скасованих
                             await asyncio.sleep(2.5)
                             
                             det = await fetch_api(session, f"/flight/{fid}")
@@ -802,7 +848,6 @@ async def main_loop():
                 save_state(state)
             except Exception as e: print(f"Loop Error: {e}")
             
-            # 🔥 Простий інтервал (без точної синхронізації) 🔥
             await asyncio.sleep(CHECK_INTERVAL)
 
 @client.event
