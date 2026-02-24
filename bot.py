@@ -432,69 +432,6 @@ async def on_message(message):
     elif message.guild and message.author.guild_permissions.administrator:
         is_admin = True
     
-    # --- 📡 КОМАНДА: !traffic (АКТИВНИЙ ТРАФІК) ---
-    if message.content == "!traffic":
-        msg = await message.channel.send("🔄 **Fetching live traffic data...**")
-        async with aiohttp.ClientSession() as session:
-            ongoing = await fetch_api(session, "/flights/ongoing")
-            
-            if not ongoing or "results" not in ongoing or len(ongoing["results"]) == 0:
-                embed = discord.Embed(title="📡 Live Traffic", description="🛬 Наразі немає активних рейсів.", color=0x3498db)
-                return await msg.edit(content=None, embed=embed)
-            
-            flights_data = []
-            for f in ongoing["results"]:
-                cs = f.get("flightNumber") or f.get("callsign") or "N/A"
-                pilot = f.get("pilot", {}).get("fullname", "Unknown")
-                if len(pilot) > 15: pilot = pilot[:12] + "..."
-                
-                ac = f.get("aircraft", {}).get("airframe", {}).get("ident")
-                if not ac: ac = f.get("aircraft", {}).get("name", "N/A")[:4]
-                
-                dep = f.get("dep", {}).get("icao", "----")
-                arr = f.get("arr", {}).get("icao", "----")
-                route = f"{dep} -> {arr}"
-                
-                ls = f.get("lastState", {})
-                alt = ls.get("alt")
-                if alt is None: alt = "N/A"
-                else: alt = str(int(alt))
-                
-                gs = "N/A"
-                if "gs" in ls and ls["gs"] is not None:
-                    gs = str(int(ls["gs"]))
-                elif "speed" in ls and isinstance(ls["speed"], dict) and ls["speed"].get("gs") is not None:
-                    gs = str(int(ls["speed"]["gs"]))
-                
-                flights_data.append((cs, pilot, ac, route, alt, gs))
-            
-            # Підрахунок ширини стовпців для центрування
-            c1_w = max(8, max(len(d[0]) for d in flights_data))
-            c2_w = max(15, max(len(d[1]) for d in flights_data))
-            c3_w = max(4, max(len(d[2]) for d in flights_data))
-            c4_w = 12 # "XXXX -> YYYY" = 12 символів
-            c5_w = max(5, max(len(d[4]) for d in flights_data))
-            c6_w = max(4, max(len(d[5]) for d in flights_data))
-            
-            # 🔥 Шапка (усі слова по центру стовпця: :^{width}) 🔥
-            header = f"{'CALLSIGN':^{c1_w}} | {'PILOT':^{c2_w}} | {'A/C':^{c3_w}} | {'ROUTE':^{c4_w}} | {'ALT':^{c5_w}} | {'GS':^{c6_w}}"
-            sep = "-" * len(header)
-            
-            table_lines = [header, sep]
-            for d in flights_data:
-                # Дані в таблиці теж акуратно вирівняні (текст ліворуч/по центру, цифри праворуч для зручності читання)
-                line = f"{d[0]:<{c1_w}} | {d[1]:<{c2_w}} | {d[2]:^{c3_w}} | {d[3]:^{c4_w}} | {d[4]:>{c5_w}} | {d[5]:>{c6_w}}"
-                table_lines.append(line)
-                
-            table_str = "\n".join(table_lines)
-            
-            embed = discord.Embed(title="📡 Live Traffic", color=0x3498db)
-            embed.description = f"```text\n{table_str}\n```"
-            
-            await msg.edit(content=None, embed=embed)
-        return
-    # --------------------------------------------------------
-
     # --- 📥 КОМАНДА: !cache (СКАЧАТИ ФАЙЛ ПАМ'ЯТІ) ---
     if message.content == "!cache":
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
@@ -638,7 +575,7 @@ async def on_message(message):
         if found_message:
             try:
                 sent_msg = await found_message.reply(content)
-                last_sent_message = sent_msg 
+                last_sent_message = sent_msg # 🔥 Зберігаємо для команди !undo
                 await message.channel.send(f"✅ **Replied to message in {found_message.channel.mention}:**\n{content}")
             except Exception as e:
                 await message.channel.send(f"❌ **Error replying:** {e}")
@@ -712,36 +649,15 @@ async def on_message(message):
         return
     # ------------------------------------------------------------
 
-    # --- 📚 РОЗУМНЕ МЕНЮ ДОПОМОГИ (!help) ---
     if message.content == "!help":
         embed = discord.Embed(title="📚 Bot Commands", color=0x3498db)
-        
-        # Команди для всіх
-        desc = "**🔹 User Commands:**\n"
-        desc += "**`!help`** — Show this list\n"
-        desc += "**`!traffic`** — Show active airline traffic\n\n"
-        
-        # Команди тільки для Адмінів
-        if is_admin:
-            desc += "**🔒 Admin / System (Restricted):**\n"
-            desc += "**`!status`** — System status\n"
-            desc += "**`!test [min]`** — Run test scenarios\n"
-            desc += "**`!spy <ID>`** — Dump flight JSON\n"
-            desc += "**`!msg [ID] <text>`** — Send text message\n"
-            desc += "**`!reply <ID> <text>`** — Reply to a message\n"
-            desc += "**`!undo`** — Delete last !msg or !reply\n"
-            desc += "**`!wow <ID> <emoji>`** — React to message\n"
-            desc += "**`!unwow <ID> <emoji>`** — Remove reaction\n"
-            desc += "**`!cache`** — Download sent.json memory\n\n"
-            desc += "**🎭 Status Management (Admin):**\n"
-            desc += "**`!next`** — Force next status\n"
-            desc += "**`!addstatus <type> <text>`** — Save & Add status\n"
-            desc += "**`!delstatus [num]`** — Delete status\n"
-            
+        desc = "**🔹 User Commands:**\n**`!help`** — Show this list\n\n"
+        desc += "**🔒 Admin / System (Restricted):**\n**`!status`** — System status\n**`!test [min]`** — Run test scenarios\n**`!spy <ID>`** — Dump flight JSON\n**`!msg [ID] <text>`** — Send text message\n**`!reply <ID> <text>`** — Reply to a message\n**`!undo`** — Delete last !msg or !reply\n**`!wow <ID> <emoji>`** — React to message\n**`!unwow <ID> <emoji>`** — Remove reaction\n**`!cache`** — Download sent.json memory\n\n"
+        desc += "**🎭 Status Management (Admin):**\n**`!next`** — Force next status\n**`!addstatus <type> <text>`** — Save & Add status\n**`!delstatus [num]`** — Delete status\n"
         embed.description = desc
         await message.channel.send(embed=embed)
         return
-
+    
     if message.content == "!next":
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         await change_status()
@@ -782,21 +698,24 @@ async def on_message(message):
             await message.channel.send("⚠️ Please enter a number.")
         return
 
-    # --- 🤖 ОНОВЛЕНИЙ !status (БЕЗ ПІДРАХУНКУ ТРАФІКУ) ---
     if message.content == "!status":
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         msg = await message.channel.send("🔄 **Checking Systems...**")
         api_status = "❌ API Error"
+        flights_count = 0 
         
         async with aiohttp.ClientSession() as session:
             test = await fetch_api(session, "/flights/ongoing")
             if test is not None: 
                 api_status = "✅ Connected to Newsky"
+                if "results" in test:
+                    flights_count = len(test["results"])
         
         launch_str = START_TIME.strftime("%d-%m-%Y %H:%M:%S UTC")
 
         embed = discord.Embed(title="🤖 Bot System Status", color=0x2ecc71)
         embed.add_field(name="📡 Newsky API", value=api_status, inline=False)
+        embed.add_field(name="✈️ Active Flights", value=f"**{flights_count}** tracking", inline=False)
         embed.add_field(name="🌍 Airports DB", value=f"✅ Loaded ({len(AIRPORTS_DB)} airports)", inline=False)
         embed.add_field(name="📶 Discord Ping", value=f"**{round(client.latency * 1000)}ms**", inline=False)
         embed.add_field(name="🚀 Launched at", value=f"`{launch_str}`", inline=False)
