@@ -818,6 +818,16 @@ async def on_message(message):
         except Exception as e: await message.channel.send(f"Error: {e}")
         return
 
+    if message.content == "!dump":
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+        await message.channel.send("🕵️ **Dumping ALL ongoing flights...**")
+        async with aiohttp.ClientSession() as session:
+            data = await fetch_api(session, "/flights/ongoing")
+            if not data: return await message.channel.send("❌ API Error")
+            file_bin = io.BytesIO(json.dumps(data, indent=4).encode())
+            await message.channel.send(content="📂 **Ось що сервер Newsky віддає насправді:**", file=discord.File(file_bin, filename="ongoing_raw.json"))
+        return
+    
     if message.content.startswith("!test"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         parts = message.content.split()
@@ -943,3 +953,4 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
+
