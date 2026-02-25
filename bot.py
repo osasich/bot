@@ -455,35 +455,22 @@ async def on_message(message):
                 arr = f.get("arr", {}).get("icao", "----")
                 route = f"{dep} -> {arr}"
                 
-                ls = f.get("lastState", {})
-                alt = ls.get("alt")
-                if alt is None: alt = "N/A"
-                else: alt = str(int(alt))
-                
-                gs = "N/A"
-                if "gs" in ls and ls["gs"] is not None:
-                    gs = str(int(ls["gs"]))
-                elif "speed" in ls and isinstance(ls["speed"], dict) and ls["speed"].get("gs") is not None:
-                    gs = str(int(ls["speed"]["gs"]))
-                
-                flights_data.append((cs, pilot, ac, route, alt, gs))
+                flights_data.append((cs, pilot, ac, route))
             
             # Підрахунок ширини стовпців для центрування
             c1_w = max(8, max(len(d[0]) for d in flights_data))
             c2_w = max(15, max(len(d[1]) for d in flights_data))
             c3_w = max(4, max(len(d[2]) for d in flights_data))
             c4_w = 12 # "XXXX -> YYYY" = 12 символів
-            c5_w = max(5, max(len(d[4]) for d in flights_data))
-            c6_w = max(4, max(len(d[5]) for d in flights_data))
             
             # 🔥 Шапка (усі слова по центру стовпця: :^{width}) 🔥
-            header = f"{'CALLSIGN':^{c1_w}} | {'PILOT':^{c2_w}} | {'A/C':^{c3_w}} | {'ROUTE':^{c4_w}} | {'ALT':^{c5_w}} | {'GS':^{c6_w}}"
+            header = f"{'CALLSIGN':^{c1_w}} | {'PILOT':^{c2_w}} | {'A/C':^{c3_w}} | {'ROUTE':^{c4_w}}"
             sep = "-" * len(header)
             
             table_lines = [header, sep]
             for d in flights_data:
-                # Дані в таблиці теж акуратно вирівняні (текст ліворуч/по центру, цифри праворуч для зручності читання)
-                line = f"{d[0]:<{c1_w}} | {d[1]:<{c2_w}} | {d[2]:^{c3_w}} | {d[3]:^{c4_w}} | {d[4]:>{c5_w}} | {d[5]:>{c6_w}}"
+                # Дані в таблиці теж акуратно вирівняні
+                line = f"{d[0]:<{c1_w}} | {d[1]:<{c2_w}} | {d[2]:^{c3_w}} | {d[3]:^{c4_w}}"
                 table_lines.append(line)
                 
             table_str = "\n".join(table_lines)
@@ -818,16 +805,6 @@ async def on_message(message):
         except Exception as e: await message.channel.send(f"Error: {e}")
         return
 
-    if message.content == "!dump":
-        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
-        await message.channel.send("🕵️ **Dumping ALL ongoing flights...**")
-        async with aiohttp.ClientSession() as session:
-            data = await fetch_api(session, "/flights/ongoing")
-            if not data: return await message.channel.send("❌ API Error")
-            file_bin = io.BytesIO(json.dumps(data, indent=4).encode())
-            await message.channel.send(content="📂 **Ось що сервер Newsky віддає насправді:**", file=discord.File(file_bin, filename="ongoing_raw.json"))
-        return
-    
     if message.content.startswith("!test"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
         parts = message.content.split()
@@ -953,4 +930,3 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
-
