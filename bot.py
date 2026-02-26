@@ -446,6 +446,55 @@ async def on_message(message):
         return
     # --------------------------------------------------------
 
+# --- 🧹 КОМАНДА: !clearwow <ID> (ОЧИСТИТИ ВСІ РЕАКЦІЇ) ---
+    if message.content.startswith("!clearwow"):
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+        parts = message.content.split()
+        if len(parts) < 2:
+            return await message.channel.send("⚠️ Usage: `!clearwow <Message_ID>`")
+        
+        target_id = parts[1]
+        
+        if not target_id.isdigit():
+             return await message.channel.send("⚠️ ID must be a number.")
+
+        found_message = None
+        
+        main_channel = client.get_channel(CHANNEL_ID)
+        if main_channel:
+            try:
+                found_message = await main_channel.fetch_message(int(target_id))
+            except:
+                pass
+        
+        if not found_message:
+            await message.channel.send("🔍 **Searching for message...**")
+            for guild in client.guilds:
+                for channel in guild.text_channels:
+                    if channel.id == CHANNEL_ID: continue
+                    try:
+                        found_message = await channel.fetch_message(int(target_id))
+                        if found_message: break
+                    except:
+                        continue
+                if found_message: break
+        
+        if found_message:
+            try:
+                await found_message.clear_reactions()
+                
+                # Якщо канал знайдено (не приватні повідомлення), робимо згадку
+                channel_mention = found_message.channel.mention if hasattr(found_message.channel, 'mention') else "Direct Messages"
+                await message.channel.send(f"✅ **Cleared all reactions from message in {channel_mention}**")
+            except discord.Forbidden:
+                await message.channel.send("❌ **Error:** I don't have 'Manage Messages' permission to clear reactions. Please check role settings.")
+            except Exception as e:
+                await message.channel.send(f"❌ **Error clearing reactions:** {e}")
+        else:
+            await message.channel.send("❌ **Message not found.** (Check ID or bot permissions)")
+        return
+    # -------------------------------------------------------------
+    
     # --- 👹 КОМАНДА: !wow <ID> <EMOJI> (СТАВИТИ РЕАКЦІЮ) ---
     if message.content.startswith("!wow"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
@@ -862,3 +911,4 @@ async def on_ready():
     client.loop.create_task(main_loop())
 
 client.run(DISCORD_TOKEN)
+
