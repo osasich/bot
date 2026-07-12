@@ -1622,10 +1622,10 @@ async def on_interaction(interaction):
                 except: pass
             client.loop.create_task(delete_stats_msg())
 
-            # 5. НАДСИЛАЄМО ЛОГ АДМІНУ В ПП
+                        # 5. НАДСИЛАЄМО ЛОГ У КАНАЛ
             if interaction.user.id not in ADMIN_IDS:
                 try:
-                    admin_user = await client.fetch_user(ADMIN_IDS[0])
+                    log_channel = client.get_channel(1474817440516018186)
                     flight_cs = f.get("flightNumber") or f.get("callsign") or flight_id
                     msg_url = interaction.message.jump_url
                     user_locale = str(interaction.locale)
@@ -1638,9 +1638,9 @@ async def on_interaction(interaction):
                         f"🔍 **Дія:** Переглянув статистику."
                     )
                     log_embed = discord.Embed(title="🔔 Лог натискання кнопки", description=log_desc, color=0x3498db)
-                    await admin_user.send(embed=log_embed)
+                    await log_channel.send(embed=log_embed)
                 except Exception as e:
-                    print(f"Помилка відправки в ПП адміну: {e}")
+                    print(f"Помилка відправки логу в канал: {e}")
 					
 # -----------------------------------------------------------------
 
