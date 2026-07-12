@@ -199,7 +199,10 @@ async def get_updated_liveries_content(session, target_ac_id, actual_arr_icao):
             if resp.status == 200:
                 data = await resp.json()
                 for ac in data.get("results", []):
-                    ns_aircraft[str(ac.get("_id"))] = ac.get("locationIcao")
+                    ns_aircraft[str(ac.get("_id"))] = {
+                        "locationIcao": ac.get("locationIcao"),
+                        "name": ac.get("name")
+                    }
     except Exception as e: 
         print(f"Error fetching aircraft list: {e}")
         pass
@@ -218,9 +221,11 @@ async def get_updated_liveries_content(session, target_ac_id, actual_arr_icao):
     for ac in livery_data.get("liveries", []):
         ac_id = str(ac.get("_id"))
         
-        # А) Оновлюємо загальну локацію з Newsky (якщо борт є у списку)
+        # А) Оновлюємо загальну локацію та назву з Newsky (якщо борт є у списку)
         if ac_id in ns_aircraft:
-            ac["locationIcao"] = ns_aircraft[ac_id]
+            ac["locationIcao"] = ns_aircraft[ac_id].get("locationIcao")
+            if ns_aircraft[ac_id].get("name"):
+                ac["name"] = ns_aircraft[ac_id].get("name")
             
         # Б) Оновлюємо lastflightlocationICAO ТІЛЬКИ для літака, що щойно сів (замінюючи логіку Newsky)
         if ac_id == str(target_ac_id) and actual_arr_icao:
