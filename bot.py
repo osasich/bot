@@ -180,6 +180,57 @@ def format_flight_for_db(f):
             }
             
     return cleanFlight
+
+async def get_updated_liveries_content(session, target_ac_id, actual_arr_icao):
+    if not NEWSKY_SID or not GITHUB_TOKEN: return None
+    
+    # 1. Запит до Newsky (список всіх бортів компанії)
+    ns_headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Cookie": f"sid={NEWSKY_SID}" if not NEWSKY_SID.startswith("sid=") else NEWSKY_SID,
+        "Content-Type": "application/json"
+    }
+    payload = {"skip": 0, "count": 100, "needle": "", "sort": "airframe.icao", "order": 1}
+    airline_id = "695810be3dc76275ba8befa9"
+    
+    ns_aircraft = {}
+    try:
+        async with session.post(f"https://newsky.app/api/airline/{airline_id}/aircraft/list", headers=ns_headers, json=payload) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                for ac in data.get("results", []):
+                    ns_aircraft[str(ac.get("_id"))] = ac.get("locationIcao")
+    except Exception as e: 
+        print(f"Error fetching aircraft list: {e}")
+        pass
+    
+    # 2. Завантаження поточного livery-matching.json з GitHub (Без кешу)
+    gh_headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3.raw", "Cache-Control": "no-cache"}
+    livery_path = "COMPANY/livery-matching.json"
+    
+    try:
+        async with session.get(f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{livery_path}", headers=gh_headers) as resp:
+            if resp.status != 200: return None
+            livery_data = json.loads(await resp.text())
+    except: return None
+    
+    # 3. М'ясорубка: оновлюємо локації
+    for ac in livery_data.get("liveries", []):
+        ac_id = str(ac.get("_id"))
+        
+        # А) Оновлюємо загальну локацію з Newsky (якщо борт є у списку)
+        if ac_id in ns_aircraft:
+            ac["locationIcao"] = ns_aircraft[ac_id]
+            
+        # Б) Оновлюємо lastflightlocationICAO ТІЛЬКИ для літака, що щойно сів (замінюючи логіку Newsky)
+        if ac_id == str(target_ac_id) and actual_arr_icao:
+            ac["lastflightlocationICAO"] = actual_arr_icao
+            
+    # 4. Оновлюємо час генерації
+    livery_data["generatedAtUtc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    
+    # Повертаємо готовий текст для запису
+    return json.dumps(livery_data, ensure_ascii=False, indent=2)
     
 async def save_flight_to_github(clean_flight, pilot_id, pilot_name, pilot_avatar, week_tag):
     if not GITHUB_TOKEN:
@@ -250,26 +301,42 @@ async def save_flight_to_github(clean_flight, pilot_id, pilot_name, pilot_avatar
                 }
                 github_file_content.append(new_pilot_block)
             
-            # 4. ВІДПРАВКА НА GITHUB
+            # 4. ВІДПРАВКА НА GITHUB (ОДНИМ КОМІТОМ РАЗОМ ІЗ LIVERY-MATCHING)
             new_content_str = json.dumps(github_file_content, ensure_ascii=False, indent=4)
-            new_content_b64 = base64.b64encode(new_content_str.encode('utf-8')).decode('utf-8')
             
-            push_payload = {
-                "message": f"🤖 Auto db update: flight {clean_flight.get('flightNumber')}",
-                "content": new_content_b64
+            # Збираємо файли для відправки
+            files_to_push = {
+                file_path: new_content_str
             }
-            if file_sha:
-                push_payload["sha"] = file_sha
+            
+            # Дістаємо ID літака та фактичний аеропорт прибуття з чистих даних рейсу
+            ac_id = clean_flight.get("aircraft", {}).get("_id")
+            act_arr = clean_flight.get("actArr")
+            arr = clean_flight.get("arr")
+            
+            actual_arr_icao = None
+            if isinstance(act_arr, dict) and act_arr.get("icao"):
+                actual_arr_icao = act_arr.get("icao")
+            elif isinstance(arr, dict) and arr.get("icao"):
+                actual_arr_icao = arr.get("icao")
                 
-            put_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{file_path}"
-            async with session.put(put_url, headers=gh_headers, json=push_payload) as put_resp:
-                if put_resp.status not in [200, 201]:
-                    err_msg = await put_resp.text()
-                    print(f"❌ Помилка запису рейсу на GitHub: {err_msg}")
-                else:
-                    print(f"✅ Рейс успішно збережено у {file_path}")
-                    if profile_changed:
-                        client.loop.create_task(update_pilot_history_on_github(pilot_id, pilot_name, pilot_avatar))
+            # Генеруємо оновлений livery-matching.json і додаємо до списку файлів на відправку
+            if ac_id:
+                livery_content = await get_updated_liveries_content(session, ac_id, actual_arr_icao)
+                if livery_content:
+                    files_to_push["COMPANY/livery-matching.json"] = livery_content
+                    
+            commit_msg = f"🤖 Auto db update: flight {clean_flight.get('flightNumber')} & Fleet Loc"
+            
+            # Відправляємо єдиним пушем через вашу готову функцію push_to_github_batch
+            success = await push_to_github_batch(session, files_to_push, commit_msg)
+            
+            if not success:
+                print(f"❌ Помилка пакетного запису рейсу та локацій на GitHub.")
+            else:
+                print(f"✅ Рейс та локації флоту успішно збережено одним комітом!")
+                if profile_changed:
+                    client.loop.create_task(update_pilot_history_on_github(pilot_id, pilot_name, pilot_avatar))
 
 
 async def update_pilot_history_on_github(pilot_id, new_name, new_avatar):
