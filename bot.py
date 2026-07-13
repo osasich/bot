@@ -1828,30 +1828,26 @@ async def on_message(message):
                 if not missing_flights:
                     return await status_msg.edit(content="✅ **Усі рейси за всі тижні вже на GitHub!** Відсутніх рейсів немає.")
 
-                # 4. Показуємо список і чекаємо на підтвердження
+                # 4. Показуємо список ВСІХ рейсів
                 confirm_text = f"📋 **Маю додати ось такі рейси ({len(missing_flights)} шт):**\n"
-                
-                display_limit = 15 # Ліміт щоб не перевищити кількість символів Discord
-                for i, (w_tag, mf) in enumerate(missing_flights):
-                    if i >= display_limit:
-                        confirm_text += f"...\n*і ще {len(missing_flights) - display_limit} рейсів*\n"
-                        break
+                for w_tag, mf in missing_flights:
                     fid = mf.get("_id") or mf.get("id")
                     cs = mf.get("flightNumber") or mf.get("callsign") or "Unknown"
                     confirm_text += f"✈️ [{cs}](https://newsky.app/flight/{fid}) (Тиждень {w_tag})\n"
                 
-                confirm_text += "\n✍️ Напиши `yes` щоб підтвердити, або `no` щоб скасувати (маєш 60 секунд)."
+                confirm_text += "\n✍️ Напиши `yes` щоб підтвердити, або `no` щоб скасувати (маєш 180 секунд)."
                 await status_msg.edit(content=confirm_text, suppress=True)
 
                 def check(m):
                     return m.author == message.author and m.channel == message.channel and m.content.lower() in ['yes', 'no']
 
                 try:
-                    reply = await client.wait_for('message', check=check, timeout=60.0)
+                    # Очікування відповіді 180 секунд
+                    reply = await client.wait_for('message', check=check, timeout=180.0)
                     if reply.content.lower() == 'no':
                         return await status_msg.edit(content="❌ **Синхронізацію скасовано.**")
                 except asyncio.TimeoutError:
-                    return await status_msg.edit(content="⏳ **Час вийшов.** Синхронізацію скасовано.")
+                    return await status_msg.edit(content="⏳ **Час вийшов (180 сек).** Синхронізацію скасовано.")
 
                 # 5. КОРИСТУВАЧ ПІДТВЕРДИВ (yes) -> М'ясорубка і Єдиний Batch Push
                 await status_msg.edit(content="⏳ **Підтверджено! Обробляю рейси та записую на GitHub єдиним комітом...**")
