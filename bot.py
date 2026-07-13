@@ -1983,6 +1983,159 @@ async def on_message(message):
             await status_msg.edit(content=f"❌ **Помилка під час патчингу:** {e}")
         return
     # -------------------------------------------------------------
+
+	# --- 🔄 КОМАНДА: !syncghweek (СИНХРОНІЗАЦІЯ РЕЙСІВ ПОТОЧНОГО ТИЖНЯ НА GITHUB) ---
+    if message.content.startswith("!syncghweek"):
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+
+        # 1. Визначаємо початок поточного тижня
+        now = datetime.now(timezone.utc)
+        monday = now - timedelta(days=now.weekday())
+        monday_start = monday.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_iso = monday_start.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        current_week_tag = get_iso_week()
+
+        status_msg = await message.channel.send(f"⏳ **Синхронізація з GitHub:** перевіряю рейси поточного тижня (`{current_week_tag}`)...")
+
+        try:
+            async with GITHUB_DB_LOCK:
+                async with aiohttp.ClientSession() as session:
+                    # 2. Завантажуємо всі рейси за тиждень з Newsky
+                    flights_list = []
+                    skip_count = 0
+                    target_count = 300 # З запасом
+                    
+                    while len(flights_list) < target_count:
+                        request_count = min(100, target_count - len(flights_list))
+                        body = {"count": request_count, "start": start_iso, "skip": skip_count}
+                        recent = await fetch_api(session, "/flights/recent", method="POST", body=body)
+                        
+                        if not recent or "results" not in recent: break
+                        batch = recent["results"]
+                        flights_list.extend(batch)
+                        if len(batch) < request_count: break
+                        skip_count += request_count
+                        
+                    total_found = len(flights_list)
+                    if total_found == 0:
+                        return await status_msg.edit(content="✅ **За цей тиждень ще немає рейсів на Newsky.**")
+
+                    await status_msg.edit(content=f"⏳ **Знайдено {total_found} рейсів на Newsky. Читаю базу GitHub...**")
+
+                    # 3. Читаємо поточний файл тижня з GitHub
+                    week_filename = f"{current_week_tag}.json"
+                    file_path = f"FLIGHTS/{week_filename}"
+                    gh_headers = {
+                        "Authorization": f"token {GITHUB_TOKEN}",
+                        "Accept": "application/vnd.github.v3+json",
+                        "Cache-Control": "no-cache"
+                    }
+                    
+                    file_sha = None
+                    github_file_content = []
+                    
+                    dir_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/FLIGHTS?t={int(time.time())}"
+                    async with session.get(dir_url, headers=gh_headers) as dir_resp:
+                        if dir_resp.status == 200:
+                            dir_data = await dir_resp.json()
+                            if isinstance(dir_data, list):
+                                for item in dir_data:
+                                    if item.get("name") == week_filename:
+                                        file_sha = item.get("sha")
+                                        break
+                                        
+                    if file_sha:
+                        blob_url = f"https://api.github.com/repos/{GITHUB_REPO}/git/blobs/{file_sha}"
+                        async with session.get(blob_url, headers=gh_headers) as blob_resp:
+                            if blob_resp.status == 200:
+                                blob_data = await blob_resp.json()
+                                text_content = base64.b64decode(blob_data['content']).decode('utf-8')
+                                github_file_content = json.loads(text_content)
+
+                    # 4. Порівнюємо і додаємо відсутні
+                    ignored_list = load_ignored()
+                    added_count = 0
+                    changed = False
+                    
+                    # Сортуємо від старих до нових
+                    flights_list.sort(key=lambda x: x.get("updatedAt", ""))
+
+                    for raw_f in flights_list:
+                        if raw_f.get("deleted") or not raw_f.get("close"): continue
+                        
+                        fid = str(raw_f.get("_id") or raw_f.get("id"))
+                        if fid in ignored_list: continue
+                        
+                        arrival_time = raw_f.get("arrTimeAct") or raw_f.get("close")
+                        if get_iso_week(arrival_time) != current_week_tag: continue
+                        
+                        # Перевіряємо, чи рейс ВЖЕ Є на гітхабі (щоб не тягнути повну інформацію зайвий раз)
+                        already_exists = False
+                        for p in github_file_content:
+                            if any(str(f.get("_id")) == fid or str(f.get("id")) == fid for f in p.get("flights", [])):
+                                already_exists = True
+                                break
+                                
+                        if already_exists: continue
+                        
+                        # Якщо рейсу немає - отримуємо всі деталі з API
+                        det = await fetch_api(session, f"/flight/{fid}")
+                        if not det or "flight" not in det: continue
+                        
+                        f = det["flight"]
+                        t = f.get("result", {}).get("totals", {})
+                        if t.get("distance", 0) == 0 and t.get("time", 0) == 0: continue
+                        
+                        # Переганяємо через м'ясорубку
+                        clean_flight = format_flight_for_db(f)
+                        pilot_data = f.get("pilot", {})
+                        pilot_id = pilot_data.get("_id", "unknown")
+                        pilot_name = pilot_data.get("fullname", "Unknown Pilot")
+                        pilot_avatar = pilot_data.get("avatar", "default")
+                        
+                        # Додаємо до спільного списку
+                        existing_pilot = next((p for p in github_file_content if p.get("pilot_id") == pilot_id), None)
+                        if existing_pilot:
+                            existing_pilot["flights"].append(clean_flight)
+                        else:
+                            github_file_content.append({
+                                "pilot_id": pilot_id,
+                                "fullname": pilot_name,
+                                "avatar": pilot_avatar,
+                                "flights": [clean_flight]
+                            })
+                            
+                        added_count += 1
+                        changed = True
+                        
+                        if added_count % 5 == 0:
+                            await status_msg.edit(content=f"⏳ **Знайдено і підготовлено {added_count} відсутніх рейсів...**")
+
+                    # 5. Відправляємо ОДНИМ комітом, якщо були зміни
+                    if changed:
+                        await status_msg.edit(content=f"📤 **Всього додано {added_count} пропущених рейсів. Пушу на GitHub одним комітом...**")
+                        new_content_str = json.dumps(github_file_content, ensure_ascii=False, indent=4)
+                        new_content_b64 = base64.b64encode(new_content_str.encode('utf-8')).decode('utf-8')
+                        
+                        push_payload = {
+                            "message": f"🤖 Auto-sync: added {added_count} missed flights to {current_week_tag}",
+                            "content": new_content_b64
+                        }
+                        if file_sha: push_payload["sha"] = file_sha
+                        
+                        put_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{file_path}"
+                        async with session.put(put_url, headers=gh_headers, json=push_payload) as put_resp:
+                            if put_resp.status in [200, 201]:
+                                await status_msg.edit(content=f"✅ **Успіх!** Додано **{added_count}** пропущених рейсів у файл `{week_filename}` на GitHub.")
+                            else:
+                                await status_msg.edit(content=f"❌ **Помилка запису на GitHub:** {await put_resp.text()}")
+                    else:
+                        await status_msg.edit(content=f"✅ **Усі рейси вже на GitHub!** Немає відсутніх рейсів у `{week_filename}`.")
+
+        except Exception as e:
+            await status_msg.edit(content=f"❌ **Сталася помилка:** {e}")
+        return
+    # -------------------------------------------------------------
 	
 # --- 📥 КОМАНДА: !syncweek (СИНХРОНІЗАЦІЯ ЗА ЧАСОМ ЗАКРИТТЯ РЕЙСІВ) ---
     if message.content.startswith("!syncweek"):
