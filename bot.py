@@ -1733,19 +1733,37 @@ async def on_message(message):
         
         try:
             async with aiohttp.ClientSession() as session:
-                # 1. Викачуємо всі рейси
+               # 1. Викачуємо всі рейси (з анти-лімітом)
                 flights_list = []
                 skip_count = 0
                 batch_size = 100
+                retry_count = 0
                 
                 while True:
-                    await status_msg.edit(content=f"⏳ Завантажую з Newsky (зміщення: {skip_count})...")
+                    if retry_count == 0:
+                        await status_msg.edit(content=f"⏳ Завантажую з Newsky (зміщення: {skip_count})...")
+                        
                     body = {"count": batch_size, "skip": skip_count, "start": "2026-01-01T00:00:00Z"}
                     recent = await fetch_api(session, "/flights/recent", method="POST", body=body)
                     
-                    if not recent or "results" not in recent or not recent["results"]: break
+                    # Якщо Newsky заблокував запит (429 ліміт), чекаємо 5 сек і пробуємо знову
+                    if recent is None:
+                        retry_count += 1
+                        if retry_count > 5:
+                            await status_msg.edit(content=f"❌ **Зупинка:** API Newsky не відповідає після 5 спроб. Вже викачано {len(flights_list)} рейсів.")
+                            break
+                        await asyncio.sleep(5)
+                        continue
+                        
+                    retry_count = 0 # Успіх! Скидаємо лічильник
+                    
+                    if "results" not in recent or not recent["results"]: 
+                        break # Справжнє дно списку
+                        
                     flights_list.extend(recent["results"])
-                    if len(recent["results"]) < batch_size: break
+                    if len(recent["results"]) < batch_size: 
+                        break # Менше 100 рейсів — це остання сторінка
+                        
                     skip_count += batch_size
                     
                 if not flights_list:
