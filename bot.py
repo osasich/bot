@@ -3175,6 +3175,110 @@ async def on_message(message):
         return await message.channel.send(text)
     # -------------------------------------------------------------
 
+	# --- 📋 КОМАНДА: !chlist (СПИСОК ВСІХ КАНАЛІВ) ---
+    if message.content == "!chlist":
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+        
+        main_channel = client.get_channel(CHANNEL_ID)
+        if not main_channel:
+            return await message.channel.send("❌ **Помилка:** Не вдалося знайти головний сервер (перевір CHANNEL_ID).")
+        
+        guild = main_channel.guild
+        await message.channel.send(f"⏳ **Збираю список каналів сервера `{guild.name}`...**")
+        
+        lines = [f"=== Список каналів сервера: {guild.name} ===\n"]
+        
+        # Спочатку категорії та канали всередині них
+        for category in guild.categories:
+            lines.append(f"📂 [Категорія] {category.name} (ID: {category.id})")
+            for ch in category.channels:
+                lines.append(f"   ├─ [{ch.type.name.upper()}] {ch.name} (ID: {ch.id})")
+            lines.append("")
+            
+        # Канали без категорій (якщо такі є)
+        uncategorized = [ch for ch in guild.channels if ch.category is None]
+        if uncategorized:
+            lines.append("📁 [Без категорії]")
+            for ch in uncategorized:
+                lines.append(f"   ├─ [{ch.type.name.upper()}] {ch.name} (ID: {ch.id})")
+                
+        file_bin = io.BytesIO("\n".join(lines).encode('utf-8'))
+        await message.channel.send(
+            content=f"✅ **Готово! Знайдено {len(guild.channels)} каналів.**",
+            file=discord.File(file_bin, filename="channel_list.txt")
+        )
+        return
+
+    # --- 📥 КОМАНДА: !chview <ID> (ВИКАЧАТИ ІСТОРІЮ КАНАЛУ) ---
+    if message.content.startswith("!chview"):
+        if not is_admin: return await message.channel.send("🚫 **Access Denied**")
+        
+        parts = message.content.split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            return await message.channel.send("⚠️ **Формат:** `!chview <Channel_ID>`")
+            
+        target_id = int(parts[1])
+        main_channel = client.get_channel(CHANNEL_ID)
+        guild = main_channel.guild if main_channel else None
+        
+        if not guild:
+            return await message.channel.send("❌ **Помилка:** Не вдалося знайти головний сервер.")
+            
+        # Знаходимо канал
+        target_channel = guild.get_channel(target_id)
+        if not target_channel:
+            try:
+                target_channel = await guild.fetch_channel(target_id)
+            except:
+                return await message.channel.send("❌ **Помилка:** Канал з таким ID не знайдено.")
+                
+        # Перевіряємо, чи можна в ньому взагалі читати повідомлення
+        if not hasattr(target_channel, 'history'):
+            return await message.channel.send("❌ **Помилка:** Цей тип каналу не підтримує історію повідомлень (наприклад, це голосовий канал без чату).")
+            
+        status_msg = await message.channel.send(f"⏳ **Викачую історію з каналу `{target_channel.name}`...** Це може зайняти деякий час.")
+        
+        try:
+            lines = [f"=== Історія повідомлень каналу: {target_channel.name} (ID: {target_id}) ===\n"]
+            count = 0
+            
+            # oldest_first=True викачує від найстаріших повідомлень до найновіших
+            async for msg in target_channel.history(limit=None, oldest_first=True):
+                time_str = msg.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+                author = msg.author.name
+                
+                # Замінюємо переноси рядків на пробіли, щоб одне повідомлення займало один рядок у файлі
+                content = msg.content.replace('\n', ' ') 
+                
+                lines.append(f"[{time_str}] {author}: {content}")
+                
+                # Якщо є вкладення (фото, файли), зберігаємо посилання на них
+                for att in msg.attachments:
+                    lines.append(f"   📎 [Вкладення]: {att.url}")
+                    
+                count += 1
+                if count % 1000 == 0:
+                    await status_msg.edit(content=f"⏳ **Викачую... Вже оброблено {count} повідомлень.**")
+                    
+            if count == 0:
+                return await status_msg.edit(content="✅ **Канал абсолютно порожній.**")
+                
+            file_bin = io.BytesIO("\n".join(lines).encode('utf-8'))
+            
+            await status_msg.delete()
+            await message.channel.send(
+                content=f"✅ **Готово! Викачано {count} повідомлень з `#{target_channel.name}`.**",
+                file=discord.File(file_bin, filename=f"export_{target_channel.name}.txt")
+            )
+            
+        except discord.Forbidden:
+            await status_msg.edit(content="❌ **Помилка:** У бота немає прав на читання історії цього каналу.")
+        except Exception as e:
+            await status_msg.edit(content=f"❌ **Сталася помилка:** {e}")
+            
+        return
+    # -------------------------------------------------------------
+
 	# --- 🔍 КОМАНДА: !idemoji <назва> (ДІЗНАТИСЯ КОД ЕМОДЗІ) ---
     if message.content.startswith("!idemoji"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
