@@ -207,15 +207,38 @@ async def get_updated_liveries_content(session, target_ac_id, actual_arr_icao):
         print(f"Error fetching aircraft list: {e}")
         pass
     
-    # 2. Завантаження поточного livery-matching.json з GitHub (Без кешу)
-    gh_headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3.raw", "Cache-Control": "no-cache"}
-    livery_path = "COMPANY/livery-matching.json"
+    # 2. Читання livery-matching.json через Blob API (Миттєво, 100% без кешу)
+    gh_headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+        "Cache-Control": "no-cache"
+    }
+    livery_data = None
     
     try:
-        async with session.get(f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{livery_path}", headers=gh_headers) as resp:
-            if resp.status != 200: return None
-            livery_data = json.loads(await resp.text())
-    except: return None
+        # Шукаємо SHA файлу в папці COMPANY (з антикеш-таймером)
+        dir_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/COMPANY?t={int(time.time())}"
+        file_sha = None
+        
+        async with session.get(dir_url, headers=gh_headers) as dir_resp:
+            if dir_resp.status == 200:
+                for item in await dir_resp.json():
+                    if item.get("name") == "livery-matching.json":
+                        file_sha = item.get("sha")
+                        break
+                        
+        # Якщо знайшли SHA, викачуємо "м'ясо" файлу напряму
+        if file_sha:
+            blob_url = f"https://api.github.com/repos/{GITHUB_REPO}/git/blobs/{file_sha}"
+            async with session.get(blob_url, headers=gh_headers) as blob_resp:
+                if blob_resp.status == 200:
+                    blob_data = await blob_resp.json()
+                    livery_data = json.loads(base64.b64decode(blob_data['content']).decode('utf-8'))
+    except Exception as e:
+        print(f"Помилка читання livery: {e}")
+        return None
+        
+    if not livery_data: return None
     
     # 3. М'ясорубка: оновлюємо локації
     for ac in livery_data.get("liveries", []):
