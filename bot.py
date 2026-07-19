@@ -1290,7 +1290,8 @@ async def send_flight_message(channel, status, f, details_type="ongoing", reply_
                 balance = int(t.get("balance", 0))
                 
                 money_emojis = [
-                    "<a:money:1499329373168209961>"
+                    "<a:money:1499329373168209961>",
+					"<a:fmp:1528514273628917770>"
                 ]
                 
                 if balance > 100000:
