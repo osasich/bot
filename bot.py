@@ -1877,7 +1877,7 @@ async def on_message(message):
                 # Якщо шматків багато, відправляємо додаткові повідомлення
                 extra_msgs = []
                 for chunk in chunks[1:]:
-                    msg = await message.channel.send(content=chunk, suppress=True)
+                    msg = await message.channel.send(content=chunk, suppress_embeds=True)
                     extra_msgs.append(msg)
 
                 def check(m):
