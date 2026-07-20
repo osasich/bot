@@ -1757,7 +1757,7 @@ async def on_message(message):
         
         try:
             async with aiohttp.ClientSession() as session:
-               # 1. Викачуємо всі рейси (з анти-лімітом)
+                # 1. Викачуємо всі рейси (з анти-лімітом)
                 flights_list = []
                 skip_count = 0
                 batch_size = 100
@@ -1852,26 +1852,48 @@ async def on_message(message):
                 if not missing_flights:
                     return await status_msg.edit(content="✅ **Усі рейси за всі тижні вже на GitHub!** Відсутніх рейсів немає.")
 
-                # 4. Показуємо список ВСІХ рейсів
-                confirm_text = f"📋 **Маю додати ось такі рейси ({len(missing_flights)} шт):**\n"
+                # 4. Показуємо список ВСІХ рейсів (з розумним розбиттям на повідомлення)
+                header = f"📋 **Маю додати ось такі рейси ({len(missing_flights)} шт):**\n"
+                chunks = []
+                current_chunk = header
+                
                 for w_tag, mf in missing_flights:
                     fid = mf.get("_id") or mf.get("id")
                     cs = mf.get("flightNumber") or mf.get("callsign") or "Unknown"
-                    confirm_text += f"✈️ [{cs}](https://newsky.app/flight/{fid}) (Тиждень {w_tag})\n"
+                    line = f"✈️ [{cs}](https://newsky.app/flight/{fid}) (Тиждень {w_tag})\n"
+                    
+                    # Ліміт Discord - 2000 символів, ми беремо із запасом 1900
+                    if len(current_chunk) + len(line) > 1900:
+                        chunks.append(current_chunk)
+                        current_chunk = line
+                    else:
+                        current_chunk += line
                 
-                confirm_text += "\n✍️ Напиши `yes` щоб підтвердити, або `no` щоб скасувати (маєш 180 секунд)."
-                await status_msg.edit(content=confirm_text, suppress=True)
+                current_chunk += "\n✍️ Напиши `yes` щоб підтвердити, або `no` щоб скасувати (маєш 180 секунд)."
+                chunks.append(current_chunk)
+
+                await status_msg.edit(content=chunks[0], suppress=True)
+                
+                # Якщо шматків багато, відправляємо додаткові повідомлення
+                extra_msgs = []
+                for chunk in chunks[1:]:
+                    msg = await message.channel.send(content=chunk, suppress=True)
+                    extra_msgs.append(msg)
 
                 def check(m):
                     return m.author == message.author and m.channel == message.channel and m.content.lower() in ['yes', 'no']
 
                 try:
-                    # Очікування відповіді 180 секунд
                     reply = await client.wait_for('message', check=check, timeout=180.0)
                     if reply.content.lower() == 'no':
                         return await status_msg.edit(content="❌ **Синхронізацію скасовано.**")
                 except asyncio.TimeoutError:
                     return await status_msg.edit(content="⏳ **Час вийшов (180 сек).** Синхронізацію скасовано.")
+                finally:
+                    # Очищаємо додаткові повідомлення, щоб не засмічувати чат
+                    for msg in extra_msgs:
+                        try: await msg.delete()
+                        except: pass
 
                 # 5. КОРИСТУВАЧ ПІДТВЕРДИВ (yes) -> М'ясорубка і Єдиний Batch Push
                 await status_msg.edit(content="⏳ **Підтверджено! Обробляю рейси та записую на GitHub єдиним комітом...**")
@@ -2016,18 +2038,30 @@ async def on_message(message):
         return
     # -------------------------------------------------------------
 
-	# --- 🔄 КОМАНДА: !syncghweek (СИНХРОНІЗАЦІЯ РЕЙСІВ ПОТОЧНОГО ТИЖНЯ З ПІДТВЕРДЖЕННЯМ) ---
+	# --- 🔄 КОМАНДА: !syncghweek (СИНХРОНІЗАЦІЯ РЕЙСІВ ТИЖНЯ З ПІДТВЕРДЖЕННЯМ) ---
     if message.content.startswith("!syncghweek"):
         if not is_admin: return await message.channel.send("🚫 **Access Denied**")
 
-        # 1. Визначаємо початок поточного тижня
+        # 1. Визначаємо початок тижня (вказаного або поточного)
+        parts = message.content.split()
         now = datetime.now(timezone.utc)
-        monday = now - timedelta(days=now.weekday())
-        monday_start = monday.replace(hour=0, minute=0, second=0, microsecond=0)
-        start_iso = monday_start.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        current_week_tag = get_iso_week()
+        
+        if len(parts) > 1 and parts[1].isdigit():
+            target_week = int(parts[1])
+            try:
+                # Шукаємо понеділок для вказаного тижня у поточному році
+                monday_start = datetime.fromisocalendar(now.year, target_week, 1).replace(tzinfo=timezone.utc)
+                monday_start = monday_start.replace(hour=0, minute=0, second=0, microsecond=0)
+            except ValueError:
+                return await message.channel.send("❌ **Помилка:** Неіснуючий номер тижня.")
+        else:
+            # Якщо номер не вказано — беремо поточний тиждень
+            monday_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
 
-        status_msg = await message.channel.send(f"⏳ **Синхронізація з GitHub:** перевіряю рейси поточного тижня (`{current_week_tag}`)...")
+        start_iso = monday_start.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        current_week_tag = get_iso_week(start_iso) # Запускаємо через твою функцію для ідеального збігу формату
+
+        status_msg = await message.channel.send(f"⏳ **Синхронізація з GitHub:** перевіряю рейси тижня (`{current_week_tag}`)...")
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -2066,7 +2100,7 @@ async def on_message(message):
                     
                 total_found = len(flights_list)
                 if total_found == 0:
-                    return await status_msg.edit(content="✅ **За цей тиждень ще немає рейсів на Newsky.**")
+                    return await status_msg.edit(content=f"✅ **За тиждень `{current_week_tag}` ще немає рейсів на Newsky.**")
 
                 await status_msg.edit(content=f"⏳ **Знайдено {total_found} рейсів на Newsky. Читаю базу GitHub...**")
 
@@ -2128,15 +2162,31 @@ async def on_message(message):
                 if not missing_flights:
                     return await status_msg.edit(content=f"✅ **Усі рейси за тиждень `{current_week_tag}` вже на GitHub!** Відсутніх рейсів немає.")
 
-                # 5. Показуємо список ВСІХ рейсів і чекаємо підтвердження
-                confirm_text = f"📋 **Маю додати ось такі рейси ({len(missing_flights)} шт):**\n"
+                # 5. Показуємо список ВСІХ рейсів (з розумним розбиттям на повідомлення)
+                header = f"📋 **Маю додати ось такі рейси ({len(missing_flights)} шт) для {current_week_tag}:**\n"
+                chunks = []
+                current_chunk = header
+                
                 for mf in missing_flights:
                     fid = mf.get("_id") or mf.get("id")
                     cs = mf.get("flightNumber") or mf.get("callsign") or "Unknown"
-                    confirm_text += f"✈️ [{cs}](https://newsky.app/flight/{fid})\n"
+                    line = f"✈️ [{cs}](https://newsky.app/flight/{fid})\n"
+                    
+                    if len(current_chunk) + len(line) > 1900:
+                        chunks.append(current_chunk)
+                        current_chunk = line
+                    else:
+                        current_chunk += line
                 
-                confirm_text += "\n✍️ Напиши `yes` щоб підтвердити, або `no` щоб скасувати (маєш 180 секунд)."
-                await status_msg.edit(content=confirm_text, suppress=True)
+                current_chunk += "\n✍️ Напиши `yes` щоб підтвердити, або `no` щоб скасувати (маєш 180 секунд)."
+                chunks.append(current_chunk)
+
+                await status_msg.edit(content=chunks[0], suppress=True)
+                
+                extra_msgs = []
+                for chunk in chunks[1:]:
+                    msg = await message.channel.send(content=chunk, suppress=True)
+                    extra_msgs.append(msg)
 
                 def check(m):
                     return m.author == message.author and m.channel == message.channel and m.content.lower() in ['yes', 'no']
@@ -2147,6 +2197,11 @@ async def on_message(message):
                         return await status_msg.edit(content="❌ **Синхронізацію скасовано.**")
                 except asyncio.TimeoutError:
                     return await status_msg.edit(content="⏳ **Час вийшов (180 сек).** Синхронізацію скасовано.")
+                finally:
+                    # Очищаємо додаткові повідомлення
+                    for msg in extra_msgs:
+                        try: await msg.delete()
+                        except: pass
 
                 # 6. КОРИСТУВАЧ ПІДТВЕРДИВ (yes) -> М'ясорубка і Єдиний Пуш
                 await status_msg.edit(content="⏳ **Підтверджено! Обробляю рейси та записую на GitHub єдиним комітом...**")
