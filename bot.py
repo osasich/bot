@@ -4318,21 +4318,54 @@ async def main_loop():
                         
                         # --- ЛОГІКА ДЛЯ ЗАКРИТИХ ТА ВИДАЛЕНИХ РЕЙСІВ ---
                         if raw_f.get("close"):
-                            print(f"⏳ Waiting for calculation: {fid}")
-							
-                            await asyncio.sleep(3)
-                            
                             det = await fetch_api(session, f"/flight/{fid}")
-                            if not det or "flight" not in det: continue
-                            f = det["flight"]
                             
-                            # 🔥 ФІЛЬТР ПОКИНУТИХ РЕЙСІВ (ABANDONED) 🔥
-                            t = f.get("result", {}).get("totals", {})
-                            if t.get("distance", 0) == 0 and t.get("time", 0) == 0:
-                                print(f"🙈 Ignored abandoned flight: {fid}")
-                                state.setdefault(fid, {})["completed"] = True
-                                continue
+                            # Універсальний аналізатор запобіжників
+                            def check_safeguards(api_data):
+                                if not api_data or "flight" not in api_data:
+                                    return "API повернуло порожню відповідь (немає даних про рейс)"
+                                fl = api_data["flight"]
+                                totals = fl.get("result", {}).get("totals", {})
+                                d = totals.get("distance", 0)
+                                t_time = totals.get("time", 0)
+                                if d == 0 and t_time == 0:
+                                    return f"Нульові показники (Дистанція: {d} nm, Час: {t_time} min)"
+                                callsign = fl.get("flightNumber") or fl.get("callsign")
+                                if not callsign or callsign == "N/A":
+                                    return "Відсутній позивний (Callsign = N/A)"
+                                return None # Якщо None - рейс ідеальний
+                                
+                            reason = check_safeguards(det)
+                            
+                            if reason:
+                                print(f"⚠️ Рейс {fid} спіймав запобіжник ({reason}). Чекаю 3 секунди...")
+                                await asyncio.sleep(3) # Чекаємо САМЕ 3 секунди
+                                
+                                # Робимо ТОЙ САМИЙ ЗАПИТ ще раз
+                                det = await fetch_api(session, f"/flight/{fid}")
+                                new_reason = check_safeguards(det)
+                                
+                                if new_reason:
+                                    print(f"🙈 Проігноровано рейс {fid} | {new_reason}")
+                                    state.setdefault(fid, {})["completed"] = True
+                                    
+                                    # Відправляємо звіт тобі в ПП з причиною
+                                    try:
+                                        owner = await client.fetch_user(ADMIN_IDS[0])
+                                        await owner.send(
+                                            f"🙈 **Проігноровано багований рейс!**\n"
+                                            f"🔗 **ID:** `{fid}`\n"
+                                            f"🌐 [Відкрити рейс на Newsky](https://newsky.app/flight/{fid})\n"
+                                            f"🛑 **Причина ігнору:** {new_reason}\n"
+                                            f"*(Дані не оновилися навіть після 3-секундної затримки)*"
+                                        )
+                                    except Exception as e:
+                                        print(f"Помилка відправки в ПП: {e}")
+                                        
+                                    continue # Скидаємо рейс і йдемо далі
 
+                            # Якщо пройшли запобіжники (з першого або другого разу)
+                            f = det["flight"]
                             cs = f.get("flightNumber") or f.get("callsign") or "N/A"
                             if cs == "N/A": continue
 
