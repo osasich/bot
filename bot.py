@@ -1337,7 +1337,7 @@ async def status_loop():
         else:
             discord_status = discord.Status.dnd         # 20:00 - 08:00: Не турбувати (Червоний)
 
-        # 2. ВИЗНАЧАЄМО ТЕКСТОВИЙ СТАТУС (з твого списку статусів)
+        # 2. ВИЗНАЧАЄМО ТЕКСТОВИЙ СТАТУС
         current_status = next(status_cycle)
         activity_type = discord.ActivityType.playing
         
@@ -1354,8 +1354,16 @@ async def status_loop():
         except Exception as e:
             print(f"Помилка оновлення статусу: {e}")
             
-        # 4. ЧЕКАЄМО 1 ГОДИНУ
-        await asyncio.sleep(3600)
+        # 4. РАХУЄМО ЧАС ДО НАСТУПНОЇ ГОДИНИ (напр. до 15:00:00)
+        # Оновлюємо змінну часу, щоб врахувати мілісекунди, витрачені на відправку запиту
+        now = datetime.now(timezone.utc) + timedelta(hours=3)
+        next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        
+        # Визначаємо точну кількість секунд до початку наступної години
+        sleep_seconds = (next_hour - now).total_seconds()
+        
+        # Бот засинає рівно до початку наступної години
+        await asyncio.sleep(sleep_seconds)
 
 # --- 🔍 ФУНКЦІЯ: Універсальний пошук повідомлень (DRY принцип) ---
 async def find_discord_message(target_id, command_message):
