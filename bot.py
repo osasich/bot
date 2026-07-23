@@ -1316,19 +1316,45 @@ async def send_flight_message(channel, status, f, details_type="ongoing", reply_
             print(f"Send error: {e}")
             return None
 
-async def change_status():
-    current_status = next(status_cycle)
-    activity_type = discord.ActivityType.playing
-    if current_status["type"] == "watch":
-        activity_type = discord.ActivityType.watching
-    elif current_status["type"] == "listen":
-        activity_type = discord.ActivityType.listening
-    await client.change_presence(activity=discord.Activity(type=activity_type, name=current_status["name"]))
-
+# --- РОЗУМНА СИСТЕМА СТАТУСІВ З ГРАФІКОМ (КИЇВСЬКИЙ ЧАС) ---
 async def status_loop():
     await client.wait_until_ready()
+    
     while not client.is_closed():
-        await change_status()
+        # Отримуємо поточний час (UTC +3 години для літнього Києва)
+        kyiv_time = datetime.now(timezone.utc) + timedelta(hours=3)
+        hour = kyiv_time.hour
+        
+        # 1. ВИЗНАЧАЄМО МЕРЕЖЕВИЙ СТАТУС (КОЛІР) ЗА ГРАФІКОМ
+        discord_status = discord.Status.online
+        
+        if 8 <= hour < 12:
+            discord_status = discord.Status.online      # 08:00 - 12:00: В мережі (Зелений)
+        elif 12 <= hour < 14:
+            discord_status = discord.Status.idle        # 12:00 - 14:00: Відійшов (Жовтий місяць)
+        elif 14 <= hour < 20:
+            discord_status = discord.Status.online      # 14:00 - 20:00: В мережі (Зелений)
+        else:
+            discord_status = discord.Status.dnd         # 20:00 - 08:00: Не турбувати (Червоний)
+
+        # 2. ВИЗНАЧАЄМО ТЕКСТОВИЙ СТАТУС (з твого списку статусів)
+        current_status = next(status_cycle)
+        activity_type = discord.ActivityType.playing
+        
+        if current_status["type"] == "watch":
+            activity_type = discord.ActivityType.watching
+        elif current_status["type"] == "listen":
+            activity_type = discord.ActivityType.listening
+            
+        activity = discord.Activity(type=activity_type, name=current_status["name"])
+        
+        # 3. ВІДПРАВЛЯЄМО В DISCORD ОДНОЧАСНО
+        try:
+            await client.change_presence(status=discord_status, activity=activity)
+        except Exception as e:
+            print(f"Помилка оновлення статусу: {e}")
+            
+        # 4. ЧЕКАЄМО 1 ГОДИНУ
         await asyncio.sleep(3600)
 
 # --- 🔍 ФУНКЦІЯ: Універсальний пошук повідомлень (DRY принцип) ---
